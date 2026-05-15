@@ -8,10 +8,15 @@ CRITICAL: rename events use "from_" (with underscore), NOT "from".
 Python reserves "from" as a keyword. The benchmark generator outputs
 events with key "from_". Reading event.get("from") returns None and
 silently breaks all renames.
+
+Fix 1: UnionFind is used alongside _name_to_cid so cascading rename
+chains (A→B→C→D) always collapse to a single path-compressed root.
 """
 from __future__ import annotations
 
 import uuid
+
+from engine.registry.union_find import UnionFind
 
 
 class AliasTracker:
@@ -29,6 +34,8 @@ class AliasTracker:
         self._name_to_cid: dict[str, str] = {}
         self._cid_to_names: dict[str, list[str]] = {}
         self._edges: set[tuple[str, str]] = set()
+        # Fix 1: path-compressed union-find for multi-hop rename chains
+        self.uf = UnionFind()
 
     def process_event(self, event: dict) -> None:
         """
@@ -109,12 +116,20 @@ class AliasTracker:
         """
         Map new name to same canonical_id as old name.
         DO NOT delete old name — historical lookups must still work.
+
+        Fix 1: also union in the UnionFind so that multi-hop chains
+        (A→B, B→C, C→D) all compress to A's root transparently.
         """
         if old not in self._name_to_cid:
-            # Old name never seen — register it first, then rename
             self._register(old)
         cid = self._name_to_cid[old]
         self._name_to_cid[new] = cid   # new name → same cid
         # Track name history (ordered: first=original, last=current)
         if new not in self._cid_to_names.get(cid, []):
             self._cid_to_names[cid].append(new)
+        # Union-Find: collapses multi-hop chains via path compression
+        self.uf.union(old, new)
+
+    def canonical(self, name: str) -> str:
+        """Return path-compressed canonical name via UnionFind."""
+        return self.uf.canonical(name)
