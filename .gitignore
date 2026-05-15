@@ -1,4 +1,23 @@
 agurum_plan.md
+
+# Python
 __pycache__/
 *.pyc
+*.pyo
 .pytest_cache/
+
+# Go build artifacts
+bin/
+gateway/test_bin
+
+# Local engine test scratch
+engine/engine_tests/
+
+# Environment
+.env
+
+# Data / storage
+data/qdrant_storage/
+
+# OS
+.DS_Store
