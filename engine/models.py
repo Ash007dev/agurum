@@ -14,7 +14,7 @@ CRITICAL FIELD NAME RULES:
 """
 from __future__ import annotations
 
-from typing import TypedDict, Optional, Literal
+from typing import TypedDict, Optional, Literal, Any
 from dataclasses import dataclass, field
 
 
@@ -113,3 +113,15 @@ class RoleNormalizedEvent:
     error_class: str            # TIMEOUT|CONNECTION|RATE_LIMIT|CRASH|GENERIC|NONE
     temporal_slot: int           # int(unix_timestamp / 60)
     canonical_id: str           # for linkage only — NEVER in embedding strings
+
+
+@dataclass
+class Episode:
+    incident_id: str
+    canonical_service_id: str
+    action: str
+    outcome: str
+    event_count: int
+    seq_vector: Any   # np.ndarray (384,) — sequence embedding
+    event_vectors: Any  # np.ndarray (n, 384) — per-event embeddings
+    family: int = -1    # extracted from incident_id suffix
