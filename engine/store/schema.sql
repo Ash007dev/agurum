@@ -20,8 +20,7 @@ CREATE INDEX IF NOT EXISTS idx_events_canonical_ts
     ON events (canonical_id, ts);
 
 CREATE INDEX IF NOT EXISTS idx_events_incident
-    ON events (incident_id)
-    WHERE incident_id IS NOT NULL;
+    ON events (incident_id);
 
 -- ── Episodes table ────────────────────────────────────────────────────────────
 -- One row per resolved incident. seq_vector stored as BLOB (float32 little-endian).
@@ -43,8 +42,7 @@ CREATE INDEX IF NOT EXISTS idx_episodes_canonical
     ON episodes (canonical_id);
 
 CREATE INDEX IF NOT EXISTS idx_episodes_family
-    ON episodes (family)
-    WHERE family >= 0;
+    ON episodes (family);
 
 -- ── Alias / rename log ────────────────────────────────────────────────────────
 -- Audit trail of all service renames. AliasTracker in-memory state is rebuilt
