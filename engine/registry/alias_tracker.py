@@ -28,27 +28,50 @@ class AliasTracker:
     def __init__(self) -> None:
         self._name_to_cid: dict[str, str] = {}
         self._cid_to_names: dict[str, list[str]] = {}
+        self._edges: set[tuple[str, str]] = set()
 
     def process_event(self, event: dict) -> None:
         """
         Call on every event in ingest(). Two jobs:
         1. Register unseen services.
-        2. Handle rename topology events (reads from_, NOT from).
+        2. Handle rename and dep_add topology events (reads from_, NOT from).
 
         Never raises. Silently skips malformed events.
         """
         # Job 1: register unseen services
         svc = event.get("service")
-        if svc and svc not in self._name_to_cid:
-            self._register(svc)
+        if svc:
+            if svc not in self._name_to_cid:
+                self._register(svc)
 
-        # Job 2: handle rename events
+        # Job 2: handle topology events
         # CRITICAL: "from_" with underscore — NOT "from"
-        if event.get("kind") == "topology" and event.get("change") == "rename":
-            old = event.get("from_")   # ← UNDERSCORE
+        if event.get("kind") == "topology":
+            change = event.get("change")
+            old = event.get("from_")
             new = event.get("to")
             if old and new:
-                self._rename(old, new)
+                if change == "rename":
+                    self._rename(old, new)
+                elif change == "dep_add":
+                    from_cid = self.resolve(old)
+                    to_cid = self.resolve(new)
+                    self._edges.add((from_cid, to_cid))
+                elif change == "dep_remove":
+                    from_cid = self.resolve(old)
+                    to_cid = self.resolve(new)
+                    if (from_cid, to_cid) in self._edges:
+                        self._edges.remove((from_cid, to_cid))
+
+    def get_role(self, cid: str) -> str:
+        in_degree = sum(1 for (f, t) in self._edges if t == cid)
+        out_degree = sum(1 for (f, t) in self._edges if f == cid)
+        
+        if in_degree == 0:
+            return "role_ingress"
+        if out_degree == 0:
+            return "role_leaf"
+        return "role_transit"
 
     def resolve(self, name: str) -> str:
         """
