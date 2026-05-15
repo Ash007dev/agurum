@@ -76,6 +76,17 @@ async def lifespan(app: FastAPI):
     )
     logger.info(f"EntityRegistry initialized (db={config.SQLITE_PATH!r}) ✓")
 
+    # ── Step 3b: P3's AliasTracker + InMemoryStore (in-memory, fast) ─────
+    # ContextReconstructor expects state.tracker (1-arg resolve) and
+    # state.store (InMemoryStore with get_by_canonical_id). These run
+    # in parallel with EntityRegistry — tracker for fast ML lookups,
+    # registry for persistent SQLite-backed identity.
+    from engine.registry.alias_tracker import AliasTracker
+    from engine.store.in_memory_store import InMemoryStore
+    app.state.tracker = AliasTracker()
+    app.state.store = InMemoryStore()
+    logger.info("AliasTracker + InMemoryStore initialized ✓")
+
     # ── Step 4: P2's OperationalGraph (NetworkX) ──────────────────────────
     from engine.graph.operational_graph import OperationalGraph
     app.state.graph = OperationalGraph()

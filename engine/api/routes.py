@@ -76,6 +76,10 @@ async def ingest_batch(request: Request) -> JSONResponse:
         ts = event.get("ts", "")
         kind = event.get("kind", "")
 
+        # ── Keep AliasTracker + InMemoryStore in sync (for ContextReconstructor)
+        state.tracker.process_event(event)
+        state.store.append(event)
+
         # ── Handle topology rename events ─────────────────────────────────
         if kind == "topology" and event.get("change") == "rename":
             old_name = event.get("from_") or event.get("from", "")
@@ -216,6 +220,7 @@ async def remediation_feedback(request: Request) -> JSONResponse:
 
     canonical_id = None
     if service:
+        # Use AliasTracker (1-arg resolve), NOT EntityRegistry (2-arg)
         canonical_id = state.tracker.resolve(service)
 
     state.learner.on_feedback(
