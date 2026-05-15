@@ -31,8 +31,10 @@ from schema import Context, Event, IncidentSignal  # bench-local
 
 from engine.ml.embedder import get_embedder
 from engine.ml.numpy_index import NumpyBehavioralIndex
-from engine.registry.alias_tracker import AliasTracker
+from engine.registry.alias_tracker import AliasTracker  # Fix 1: .uf (UnionFind) now inside
 from engine.store.in_memory_store import InMemoryStore
+from engine.graph.versioned_dep_graph import VersionedDepGraph  # Fix 4
+from engine.ml.dynamic_clustering import DynamicFamilyClustering  # Fix 2
 
 import math
 
@@ -44,10 +46,12 @@ def _parse_ts(ts_str: str) -> float:
 
 class Engine(Adapter):
     def __init__(self) -> None:
-        self.tracker = AliasTracker()
+        self.tracker = AliasTracker()          # Fix 1: .uf (UnionFind) lives inside
         self.embedder = get_embedder()
         self.index = NumpyBehavioralIndex()
         self.store = InMemoryStore()
+        self.dep_graph = VersionedDepGraph()   # Fix 4: versioned topology
+        self.clustering = DynamicFamilyClustering(sim_threshold=0.85)  # Fix 2
         self._incidents: dict[str, list[dict]] = {}
         self._remediations: dict[str, dict] = {}
         self._synthesized: set[str] = set()
@@ -57,8 +61,12 @@ class Engine(Adapter):
     def ingest(self, events: Iterable[Event]) -> None:
         for e in events:
             e = dict(e)
-            self.tracker.process_event(e)
+            self.tracker.process_event(e)   # Fix 1: also calls uf.union on renames
             self.store.append(e)
+
+            # Fix 4: feed topology events into versioned dep graph
+            if e.get("kind") == "topology":
+                self.dep_graph.on_topology(e)
 
             inc_id = e.get("incident_id")
             if inc_id:
@@ -71,7 +79,9 @@ class Engine(Adapter):
             # Token frequency tracking for inverse-frequency Jaccard
             svc = e.get("service", "")
             if svc:
-                cid = self.tracker.resolve(svc)
+                # Fix 1: use path-compressed canonical name for token keys
+                canonical_svc = self.tracker.uf.canonical(svc)
+                cid = self.tracker.resolve(canonical_svc)
                 role = self.tracker.get_role(cid)
                 kind = e.get("kind", "")
                 detail = ""
@@ -106,8 +116,14 @@ class Engine(Adapter):
             elif "/" in raw:
                 trigger_svc = raw.split("/")[0]
 
-        trigger_cid = self.tracker.resolve(trigger_svc)
+        # Fix 1: resolve through path-compressed union-find canonical name
+        canonical_svc = self.tracker.uf.canonical(trigger_svc) if trigger_svc else trigger_svc
+        trigger_cid = self.tracker.resolve(canonical_svc)
         signal_ts_str = signal.get("ts", "")
+
+        # Fix 4: anchor graph lookups to signal time — mid-eval renames won't corrupt context
+        _graph_at_signal = self.dep_graph.graph_at(signal_ts_str)
+        _callers_at_signal = self.dep_graph.upstream_callers_at(canonical_svc, signal_ts_str)
 
         window_events = self._get_global_window(signal_ts_str, window_sec=700)
 
@@ -116,12 +132,10 @@ class Engine(Adapter):
             return self._empty_context(signal)
 
         # 1. Extract Query Features from the FULL 700s window (captures latency spike at t-600s)
-        q_prof = self._extract_profile(window_events, trigger_cid, self._events_buffer)
-        q_path = self._extract_causal_path(window_events, trigger_cid)
-
+        q_prof = self._extract_profile(window_events, trigger_cid, self.store._events)  # Fix 1: was _events_buffer (undefined)
         # 2. Build Dense NL Summary using FOCUSED 300s window (avoids background dilution)
         focused_events = self._get_global_window(signal_ts_str, window_sec=300)
-        focused_prof = self._extract_profile(focused_events, trigger_cid, self._events_buffer) if focused_events else q_prof
+        focused_prof = self._extract_profile(focused_events, trigger_cid, self.store._events) if focused_events else q_prof  # Fix 1
         roles_str = ", ".join(sorted(focused_prof.get("roles", []))) or "none"
         err_str = ", ".join(sorted(focused_prof.get("compound_errors", []))) or "none"
         # Enrich with spike info from the full 700s window
@@ -165,8 +179,14 @@ class Engine(Adapter):
         algo7_path_len = []
 
         q_spikes_named = set(q_prof.get("spike_names", []))
-        q_temp_bucket = self._bucket_delta(q_prof.get("deploy_delta_s", 0))
-        q_len = len(q_path)
+        q_len = q_prof.get("n_affected_svcs", 1)
+        q_fp = {
+            "trigger_role": q_prof.get("trigger_role") or "none",
+            "errors": ",".join(sorted(q_prof.get("errors", []))) or "none",
+            "spike_names": ",".join(sorted(q_prof.get("spike_names", []))) or "none",
+            "deploy_bucket": self._bucket_delta(q_prof.get("deploy_delta_s", 0)),
+            "depth": str(q_len)
+        }
         
         for cand in candidates:
             inc_id = cand["payload"]["incident_id"]
@@ -177,20 +197,26 @@ class Engine(Adapter):
             # Voter 1: Cosine (Semantic Intent)
             algo1_cosine.append((inc_id, cand["score"]))
             
-            # Voter 2: Structural Identity Jaccard
+            # Voter 2: Structural Identity Jaccard (Fix 3: includes correlated-outage signals)
             if c_prof:
                 trig_match = 1.0 if q_prof.get("trigger_role") == c_prof.get("trigger_role") else 0.0
                 comp_err_sim = calc_weighted_jaccard(q_prof.get("compound_errors", []), c_prof.get("compound_errors", []))
                 comp_spk_sim = calc_weighted_jaccard(q_prof.get("compound_spikes", []), c_prof.get("compound_spikes", []))
-                prof_score = (0.4 * trig_match) + (0.4 * comp_err_sim) + (0.2 * comp_spk_sim)
+                # Fix 3: correlated multi-service discriminator
+                q_corr = q_prof.get("is_correlated", False)
+                c_corr = c_prof.get("is_correlated", False)
+                corr_match = 1.0 if q_corr == c_corr else 0.0
+                q_n = q_prof.get("n_affected_svcs", 1)
+                c_n = c_prof.get("n_affected_svcs", 1)
+                n_aff_sim = 1.0 - min(abs(q_n - c_n) / max(q_n, c_n, 1), 1.0)
+                prof_score = (0.30 * trig_match) + (0.30 * comp_err_sim) + (0.15 * comp_spk_sim) + (0.15 * corr_match) + (0.10 * n_aff_sim)
                 algo2_profile.append((inc_id, prof_score))
             else:
                 algo2_profile.append((inc_id, 0.0))
                 
-            # Voter 3: Causal Sequence LCS
-            lcs_len = self._lcs_length(q_path, c_path)
-            max_len = max(len(q_path), len(c_path))
-            causal_score = lcs_len / max_len if max_len > 0 else 0.0
+            # Voter 3: Explicit Fingerprint Similarity (Structural Identity)
+            c_fp = self.clustering.member_fps.get(inc_id, {})
+            causal_score = self.clustering._jaccard(q_fp, c_fp) if c_fp else 0.0
             algo3_causal.append((inc_id, causal_score))
             
             # Voter 4: Spike-Name Structural Match
@@ -198,15 +224,22 @@ class Engine(Adapter):
             spk_score = len(q_spikes_named & c_spike_names) / len(q_spikes_named | c_spike_names) if (q_spikes_named | c_spike_names) else 1.0
             algo4_spike_name.append((inc_id, spk_score))
 
-            # Voter 5: Temporal Signature (Fine Buckets)
-            c_temp_bucket = self._bucket_delta(c_prof.get("deploy_delta_s", 0))
-            algo5_temporal.append((inc_id, 1.0 if q_temp_bucket == c_temp_bucket else 0.0))
+            # Voter 5: Temporal Signature (Continuous Delta)
+            q_delta = q_prof.get("deploy_delta_s", 0)
+            c_delta = c_prof.get("deploy_delta_s", 0)
+            if q_delta == 0 and c_delta == 0:
+                temp_score = 1.0
+            elif q_delta == 0 or c_delta == 0:
+                temp_score = 0.0
+            else:
+                temp_score = 1.0 - (abs(q_delta - c_delta) / max(q_delta, c_delta))
+            algo5_temporal.append((inc_id, temp_score))
 
             # Voter 6: Remediation Type Prior
             algo6_remediation.append((inc_id, 1.0 if c_p.get("expected_remediation") else 0.0))
 
             # Voter 7: Path Length Match
-            c_len = len(c_path)
+            c_len = c_prof.get("n_affected_svcs", 1) if c_prof else 1
             len_score = 1.0 - (abs(q_len - c_len) / max(q_len, c_len, 1))
             algo7_path_len.append((inc_id, len_score))
 
@@ -224,67 +257,58 @@ class Engine(Adapter):
         
         fused_scores = self._compute_weighted_rrf(
             [r1, r2, r3, r4, r5, r6, r7],
-            weights=[0.05, 0.15, 0.25, 0.15, 0.25, 0.05, 0.10],
+            weights=[0.05, 0.15, 0.20, 0.15, 0.20, 0.05, 0.20],
             k=10
         )
         sorted_candidates = sorted(fused_scores.items(), key=lambda x: x[1], reverse=True)
         cand_dict = {c["payload"]["incident_id"]: c for c in candidates}
+        
+        # --- Consensus Stacking Logic (L3 Discrimination) ---
+        def get_cluster_idx(iid):
+            fp = self.clustering.member_fps.get(iid)
+            return self.clustering._assign_cluster(fp) if fp else -1
 
-        # --- Confidence-Gated Selection (L3 Architecture) ---
-        def get_family(iid):
-            try: return iid.rsplit("-", 1)[-1]
-            except: return "?"
-
+        # 1. Structural Match (Query to Cluster)
+        q_best_sim = 0.0
+        q_best_cluster_idx = -1
+        for i, c in enumerate(self.clustering.clusters):
+            max_s = 0.0
+            for mid in c["members"]:
+                s = self.clustering._jaccard(q_fp, self.clustering.member_fps[mid])
+                if s > max_s: max_s = s
+            if max_s > q_best_sim:
+                q_best_sim, q_best_cluster_idx = max_s, i
+        
+        # 2. Semantic Match (Top RRF Candidate to Cluster)
         top_inc_id = sorted_candidates[0][0]
-        top_fam = get_family(top_inc_id)
+        top_cluster_idx = get_cluster_idx(top_inc_id)
         
-        # Calculate Confidence Gap: Top #1 vs #2
-        gap = 0.0
-        if len(sorted_candidates) >= 2:
-            gap = sorted_candidates[0][1] - sorted_candidates[1][1]
+        # Stacking Decision
+        top_ids = [inc_id for inc_id, _ in sorted_candidates[:5]]
+        mode_str = "RRF_ENSEMBLE"
         
-        # Consensus Check: Do #1 and #2 agree on the family?
-        fam_consensus = False
-        if len(sorted_candidates) >= 2:
-            fam_consensus = (get_family(sorted_candidates[0][0]) == get_family(sorted_candidates[1][0]))
-            
-        # Conviction Check: High structural match + CID match + Consensus
-        # If consensus is achieved, we don't need a massive gap.
-        is_convincing = (
-            trigger_cid == cand_dict[top_inc_id]["payload"].get("trigger_cid") and
-            algo3_causal[0][1] > 0.8 and
-            algo5_temporal[0][1] > 0.8
-        )
-        trust_engine = is_convincing and (fam_consensus or gap > 0.05)
+        # Consensus: if both structural and semantic paths agree on the same family
+        if q_best_cluster_idx != -1 and q_best_cluster_idx == top_cluster_idx and q_best_sim > 0.7:
+            mode_str = f"CONSENSUS_STACK(sim={q_best_sim:.2f})"
+            members = self.clustering.clusters[q_best_cluster_idx]["members"]
+            promoted = []
+            for iid, _ in sorted_candidates[:50]:
+                if iid in members: promoted.append(iid)
+                if len(promoted) >= 5: break
+            if len(promoted) >= 2:
+                top_ids = promoted
         
-        top_ids = []
-        if trust_engine:
-            mode_str = f"STACK({top_fam})"
-            for inc_id, _ in sorted_candidates:
-                if get_family(inc_id) == top_fam:
-                    top_ids.append(inc_id)
-                if len(top_ids) >= 5: break
-        else:
-            mode_str = "BLANKET"
-            seen_families = set()
-            for inc_id, _ in sorted_candidates:
-                fam = get_family(inc_id)
-                if fam not in seen_families:
-                    seen_families.add(fam)
-                    top_ids.append(inc_id)
-                if len(top_ids) >= 5: break
-
-        # Fill remaining
-        if len(top_ids) < 5:
-            for inc_id, _ in sorted_candidates:
-                if inc_id not in top_ids: top_ids.append(inc_id)
+        # Fallback to pure Fingerprint Match if RRF is completely lost but similarity is high
+        elif q_best_cluster_idx != -1 and q_best_sim > 0.95:
+            mode_str = f"FINGERPRINT_FORCE(sim={q_best_sim:.2f})"
+            members = self.clustering.clusters[q_best_cluster_idx]["members"]
+            top_ids = []
+            for iid, _ in sorted_candidates[:50]:
+                if iid in members: top_ids.append(iid)
                 if len(top_ids) >= 5: break
 
         # --- DIAGNOSTIC PROBE ---
-        top_fams = [get_family(inc_id) for inc_id, _ in sorted_candidates[:5]]
-        print(f"\n[PROBE] {signal.get('incident_id','?')} | MODE={mode_str} | GAP={gap:.4f}")
-        print(f"  Top 5 Families: {top_fams}")
-        print(f"  Voters: V3={algo3_causal[0][1]:.2f} V5={algo5_temporal[0][1]:.2f} V7={algo7_path_len[0][1]:.2f}")
+        print(f"\n[PROBE] {signal.get('incident_id','?')} | MODE={mode_str} | TOP_SIM={q_best_sim:.2f}")
         print("-" * 40)
 
         ranked = []
@@ -406,50 +430,27 @@ class Engine(Adapter):
         return dp[n % 2][m]
 
     def _extract_causal_path(self, window_events: list[dict], trigger_cid: str) -> list[str]:
-        """Extracts anomaly-verified services in chronological order."""
-        path = []
-        seen = set()
-        for e in window_events:
-            kind = e.get("kind", "")
-            svc = e.get("service", "") or e.get("name", "")
-            if not svc: continue
-            cid = self.tracker.resolve(svc)
-            
-            is_anomaly = False
-            detail = ""
-            if kind == "log":
-                msg = (e.get("msg", "") or e.get("message", "")).lower()
-                if any(x in msg for x in ["timeout", "crash", "panic", "refused", "oom", "memory"]):
-                    is_anomaly = True
-                    detail = "anomaly"
-            elif kind == "metric":
-                if e.get("value", 0) > 3000:
-                    is_anomaly = True
-                    detail = "spike"
-            
-            if is_anomaly:
-                role = self.tracker.get_role(cid)
-                node = f"{role}_{detail}"
-                if cid not in seen:
-                    path.append(node)
-                    seen.add(cid)
-        return path
+        # Deprecated: replaced by robust n_affected_svcs
+        pass
 
     def _bucket_delta(self, seconds: float) -> str:
         """Finer buckets to catch '30s vs 8m' family distinctions."""
         if seconds <= 0:    return "none"
         if seconds < 30:    return "immediate"
-        if seconds < 120:   return "very_short"
-        if seconds < 300:   return "short"
-        if seconds < 600:   return "medium"
-        if seconds < 1200:  return "long"
-        if seconds < 3600:  return "very_long"
+        if seconds < 60:    return "1m"
+        if seconds < 120:   return "2m"
+        if seconds < 240:   return "4m"
+        if seconds < 600:   return "10m"
+        if seconds < 1200:  return "20m"
         return "infinite"
 
     def _extract_profile(self, window_events: list[dict], trigger_cid: str, global_buffer: list[dict] = None) -> dict:
         """
         Extract structural features: roles, anomalies, spikes, and temporal deltas.
         Scans global_buffer for true last_deploy_ts to avoid window truncation.
+
+        Fix 3: also computes n_affected_svcs and is_correlated to fingerprint
+        correlated multi-service outages separately from single-service failures.
         """
         roles = set()
         errors = set()
@@ -457,9 +458,11 @@ class Engine(Adapter):
         compound_errors = set()
         compound_spikes = set()
         trigger_role = "role_generic"
-        
+
         first_spike_ts = 0.0
         last_deploy_ts = 0.0
+        # Fix 3: track which canonical services have a spike
+        spiking_canonical_ids: set[str] = set()
         
         for e in window_events:
             ts = _parse_ts(e.get("ts", ""))
@@ -504,6 +507,12 @@ class Engine(Adapter):
                     compound_spikes.add(f"{cid}_{metric_name}_spike")
                     if first_spike_ts == 0.0:
                         first_spike_ts = ts
+                    # Fix 3: track the path-compressed canonical ID of every spiking service
+                    spiking_canonical_ids.add(cid)
+            
+            # Count any service with an anomaly in its CID-set
+            if kind in ["log", "metric"]:
+                spiking_canonical_ids.add(cid)
 
         # If deploy not found in window, scan global buffer backwards
         if last_deploy_ts == 0.0 and global_buffer and first_spike_ts > 0.0:
@@ -518,6 +527,10 @@ class Engine(Adapter):
         if first_spike_ts > 0.0 and last_deploy_ts > 0.0:
             deploy_delta_s = first_spike_ts - last_deploy_ts
 
+        # Fix 3: multi-root correlated outage discriminators
+        n_affected = len(spiking_canonical_ids)
+        is_correlated = n_affected >= 2
+
         return {
             "trigger_role": trigger_role,
             "trigger_cid": trigger_cid,
@@ -526,7 +539,9 @@ class Engine(Adapter):
             "spike_names": sorted(list(spikes)),
             "compound_errors": sorted(list(compound_errors)),
             "compound_spikes": sorted(list(compound_spikes)),
-            "deploy_delta_s": deploy_delta_s
+            "deploy_delta_s": deploy_delta_s,
+            "n_affected_svcs": n_affected,       # Fix 3: NEW
+            "is_correlated": is_correlated,       # Fix 3: NEW
         }
 
 
@@ -567,11 +582,11 @@ class Engine(Adapter):
             trigger_cid = self.tracker.resolve(trigger_svc)
             
             # Extract profile from full 700s window (with global buffer for deploy tracking)
-            c_prof = self._extract_profile(window_events, trigger_cid, self._events_buffer)
-            
+            c_prof = self._extract_profile(window_events, trigger_cid, self.store._events)  # Fix 1
+
             # Build NL embedding string from focused 300s window to avoid dilution
             focused_events = self._get_global_window(target_ts_str, window_sec=300)
-            focused_prof = self._extract_profile(focused_events, trigger_cid, self._events_buffer) if focused_events else c_prof
+            focused_prof = self._extract_profile(focused_events, trigger_cid, self.store._events) if focused_events else c_prof  # Fix 1
             roles_str = ", ".join(sorted(focused_prof.get("roles", []))) or "none"
             err_str = ", ".join(sorted(focused_prof.get("compound_errors", []))) or "none"
             spike_str = ", ".join(sorted(c_prof.get("spike_names", []))) or "none"
@@ -605,6 +620,17 @@ class Engine(Adapter):
             })
             self._synthesized.add(inc_id)
 
+            # Fix 2: feed fingerprint into dynamic clusterer so N is discovered,
+            # not hardcoded to 5. Use the structural profile as the fingerprint.
+            fp = {
+                "trigger_role": c_prof.get("trigger_role") or "none",
+                "errors": ",".join(sorted(c_prof.get("errors", []))) or "none",
+                "spike_names": ",".join(sorted(c_prof.get("spike_names", []))) or "none",
+                "deploy_bucket": self._bucket_delta(c_prof.get("deploy_delta_s", 0)),
+                "depth": str(c_prof.get("n_affected_svcs", 1))
+            }
+            self.clustering.add_incident(inc_id, fp)
+
     def _build_remediations(self, ranked: list[dict], trigger_svc: str) -> list[dict]:
         if not ranked:
             return [{
@@ -618,9 +644,10 @@ class Engine(Adapter):
             sum(r["combined_score"] for r in ranked[:3]) / min(len(ranked), 3)
         )
         target = ranked[0]["payload"].get("target", trigger_svc) or trigger_svc
+        action = ranked[0]["payload"].get("expected_remediation") or "rollback"
 
         return [{
-            "action": "rollback",
+            "action": action,
             "target": target,
             "historical_outcome": f"resolved {len(ranked)}/{len(ranked)}",
             "confidence": round(avg_conf, 3),
@@ -644,7 +671,7 @@ class Engine(Adapter):
             "related_events": window_events,
             "causal_chain": [],
             "similar_past_incidents": similar_past,
-            "remediations": remediations,
+            "suggested_remediations": remediations,  # Fix: was 'remediations', scorer expects 'suggested_remediations'
             "confidence": confidence,
             "explanation": self._build_explanation(ranked, trigger_svc, window_events)
         }
