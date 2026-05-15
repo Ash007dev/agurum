@@ -5,7 +5,7 @@ __pycache__/
 *.pyc
 *.pyo
 .pytest_cache/
-venv/
+/.venv
 
 # Go build artifacts
 bin/
@@ -22,3 +22,11 @@ data/qdrant_storage/
 
 # OS
 .DS_Store
+
+# Environments
+.venv/
+venv/
+
+# Benchmark Outputs
+bench-p02-context/report.json
+
