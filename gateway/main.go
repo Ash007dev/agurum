@@ -39,7 +39,12 @@ func main() {
 	}
 
 	rb := NewRingBuffer(capVal)
-	f := NewFlusher(rb, "http://unix/batch", batchSize, intervalMs)
+	
+	targetURL := "http://unix/batch"
+	if os.Getenv("PCE_UDS_PATH") == "" {
+		targetURL = "http://127.0.0.1:8000/batch"
+	}
+	f := NewFlusher(rb, targetURL, batchSize, intervalMs)
 
 	ctx, cancel := context.WithCancel(context.Background())
 

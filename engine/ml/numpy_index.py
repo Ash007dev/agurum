@@ -7,6 +7,7 @@ Sub-millisecond for <500 episodes. Vectors must be L2-normalized (dot = cosine).
 from __future__ import annotations
 
 import numpy as np
+from typing import Any
 
 
 class NumpyBehavioralIndex:
@@ -45,6 +46,13 @@ class NumpyBehavioralIndex:
             }
             for i in top_idx
         ]
+
+    def update_payload(self, incident_id: str, key: str, value: Any) -> None:
+        """Update a specific key in the payload metadata for an episode."""
+        for i, m in enumerate(self._metadata):
+            if m["incident_id"] == incident_id:
+                self._metadata[i][key] = value
+                return
 
     def __len__(self) -> int:
         return len(self._embeddings)

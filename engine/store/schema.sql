@@ -63,3 +63,14 @@ CREATE INDEX IF NOT EXISTS idx_alias_name
 
 CREATE INDEX IF NOT EXISTS idx_alias_canonical
     ON alias_log (canonical_id);
+
+-- ── Continuous Learning ──────────────────────────────────────────────────────
+-- Tracks EWMA (Exponentially Weighted Moving Average) co-occurrence counts
+-- between canonical entities for causal confidence boosting.
+
+CREATE TABLE IF NOT EXISTS entity_pair_stats (
+    canonical_id_a VARCHAR(64) NOT NULL,
+    canonical_id_b VARCHAR(64) NOT NULL,
+    ewma_weight    DOUBLE      NOT NULL DEFAULT 0.0,
+    PRIMARY KEY (canonical_id_a, canonical_id_b)
+);

@@ -183,6 +183,39 @@ class EventStore:
         ).fetchall()
         return {row[0]: row[1] for row in rows}
 
+    # ── Continuous Learning ────────────────────────────────────────────────────
+
+    def update_pair_stats_ewma(self, cid_a: str, cid_b: str, alpha: float, observation: float) -> float:
+        """
+        Apply EWMA update to a pair of canonical IDs. Returns the new weight.
+        """
+        # Ensure consistent ordering
+        cid_1, cid_2 = sorted([cid_a, cid_b])
+        
+        row = self._conn.execute(
+            "SELECT ewma_weight FROM entity_pair_stats WHERE canonical_id_a = ? AND canonical_id_b = ?",
+            [cid_1, cid_2]
+        ).fetchone()
+        
+        old_val = row[0] if row else 0.0
+        new_val = alpha * observation + (1.0 - alpha) * old_val
+        
+        self._conn.execute(
+            """
+            INSERT OR REPLACE INTO entity_pair_stats (canonical_id_a, canonical_id_b, ewma_weight)
+            VALUES (?, ?, ?)
+            """,
+            [cid_1, cid_2, new_val]
+        )
+        return new_val
+
+    def get_all_pair_stats(self) -> dict[tuple[str, str], float]:
+        """Load all pair stats into memory."""
+        rows = self._conn.execute(
+            "SELECT canonical_id_a, canonical_id_b, ewma_weight FROM entity_pair_stats"
+        ).fetchall()
+        return {(r[0], r[1]): r[2] for r in rows}
+
     # ── Lifecycle ──────────────────────────────────────────────────────────────
 
     def close(self) -> None:

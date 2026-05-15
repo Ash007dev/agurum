@@ -18,18 +18,21 @@ _SLEEP_BETWEEN = 0.08   # seconds
 
 @pytest.fixture(scope="module")
 def stress_gateway():
-    sock_path = "/tmp/test_stress.sock"
-    srv = run_uds_server(sock_path)
     env = os.environ.copy()
     env.update({
         "RING_BUFFER_CAP": "10000",
         "BATCH_SIZE": "100",
         "BATCH_INTERVAL_MS": "100",
-        "UDS_PATH": sock_path,
+        "PCE_UDS_PATH": "",  # Force Go Gateway to use TCP fallback (hits live API on port 8000)
         "GATEWAY_PORT": str(GATEWAY_PORT),
     })
+    # Use the precompiled binary to avoid 'go run' startup lag which causes timeouts on Windows
+    gateway_bin = os.path.join(os.path.dirname(__file__), "..", "bin", "gateway.exe")
+    if not os.path.exists(gateway_bin):
+        gateway_bin = os.path.join(os.path.dirname(__file__), "..", "bin", "gateway") # fallback for non-Windows
+    
     proc = subprocess.Popen(
-        ["go", "run", "."],
+        [gateway_bin],
         cwd="gateway", stdin=subprocess.PIPE,
         env=env,
         stdout=subprocess.DEVNULL,
@@ -39,9 +42,6 @@ def stress_gateway():
     yield f"http://localhost:{GATEWAY_PORT}"
     proc.terminate()
     proc.wait()
-    srv.close()
-    if os.path.exists(sock_path):
-        os.unlink(sock_path)
 
 
 def test_gateway_stress(stress_gateway):

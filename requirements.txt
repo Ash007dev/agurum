@@ -1,18 +1,19 @@
-# ML & Vector Search (P3)
-sentence-transformers==2.7.0
-qdrant-client==1.9.1
-numpy
-
-# Graph & Math (P2)
-networkx==3.3
-
-# Storage (P4)
-duckdb==0.10.3
-
 # API & Orchestration (P4)
 fastapi==0.111.0
 uvicorn==0.30.1
 
+# ML & Vector Search (P3)
+sentence-transformers==2.7.0
+torch==2.3.0
+numpy==1.26.4
+qdrant-client==1.9.1
+anthropic==0.28.0
+
+# Graph & Math (P2)
+networkx==3.2.1
+
+# Storage (P4)
+duckdb==0.10.3
+
 # Testing
-pytest
-pytest-asyncio
+pytest==8.2.0

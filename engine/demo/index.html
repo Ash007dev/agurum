@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>agurum — Persistent Context Engine Demo</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{--bg:#0a0e17;--surface:#111827;--surface2:#1e293b;--border:#334155;--accent:#6366f1;--accent2:#818cf8;--green:#22c55e;--red:#ef4444;--amber:#f59e0b;--cyan:#06b6d4;--text:#e2e8f0;--muted:#94a3b8;--font:'Inter',sans-serif;--mono:'JetBrains Mono',monospace}
+body{background:var(--bg);color:var(--text);font-family:var(--font);min-height:100vh;padding:1.5rem}
+h1{font-size:1.75rem;font-weight:700;background:linear-gradient(135deg,var(--accent2),var(--cyan));-webkit-background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:.25rem}
+.subtitle{color:var(--muted);font-size:.85rem;margin-bottom:1.5rem}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-bottom:1rem}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:1.25rem}
+.card h2{font-size:1rem;font-weight:600;margin-bottom:.75rem;display:flex;align-items:center;gap:.5rem}
+.badge{font-size:.65rem;padding:2px 8px;border-radius:99px;font-weight:600;text-transform:uppercase}
+.badge-green{background:rgba(34,197,94,.15);color:var(--green)}
+.badge-amber{background:rgba(245,158,11,.15);color:var(--amber)}
+.badge-red{background:rgba(239,68,68,.15);color:var(--red)}
+.badge-cyan{background:rgba(6,182,212,.15);color:var(--cyan)}
+.btn{padding:.5rem 1rem;border:none;border-radius:8px;font-family:var(--font);font-size:.8rem;font-weight:600;cursor:pointer;transition:all .2s}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+.btn-primary{background:var(--accent);color:#fff}.btn-primary:hover:not(:disabled){background:var(--accent2)}
+.btn-green{background:var(--green);color:#000}.btn-green:hover:not(:disabled){background:#4ade80}
+.btn-red{background:var(--red);color:#fff}.btn-red:hover:not(:disabled){background:#f87171}
+.btn-amber{background:var(--amber);color:#000}.btn-amber:hover:not(:disabled){background:#fbbf24}
+.btn-sm{padding:.35rem .75rem;font-size:.75rem}
+.actions{display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.75rem}
+.log{background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:.75rem;font-family:var(--mono);font-size:.7rem;max-height:200px;overflow-y:auto;line-height:1.6;color:var(--muted)}
+.log .info{color:var(--cyan)}.log .warn{color:var(--amber)}.log .error{color:var(--red)}.log .ok{color:var(--green)}
+.config-row{display:flex;gap:.5rem;align-items:center;margin-bottom:.5rem}
+.config-row label{font-size:.75rem;color:var(--muted);min-width:60px}
+.config-row input{background:var(--bg);border:1px solid var(--border);color:var(--text);padding:.35rem .5rem;border-radius:6px;font-family:var(--mono);font-size:.75rem;width:200px}
+.result-box{background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:1rem;margin-top:.75rem;max-height:400px;overflow-y:auto}
+pre{font-family:var(--mono);font-size:.7rem;white-space:pre-wrap;word-break:break-all;color:var(--text)}
+.full-width{grid-column:1/-1}
+.status-bar{display:flex;gap:1rem;align-items:center;font-size:.75rem;color:var(--muted);margin-bottom:1rem;padding:.5rem .75rem;background:var(--surface);border-radius:8px;border:1px solid var(--border)}
+.dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:4px}
+.dot-green{background:var(--green);box-shadow:0 0 6px var(--green)}
+.dot-red{background:var(--red);box-shadow:0 0 6px var(--red)}
+</style>
+</head>
+<body>
+<h1>⬡ agurum</h1>
+<p class="subtitle">Persistent Context Engine — Rename Robustness Demo</p>
+<div class="status-bar" id="statusBar"><span class="dot dot-red" id="statusDot"></span><span id="statusText">Disconnected</span><span style="margin-left:auto" id="statsText">—</span></div>
+<div class="grid">
+  <div class="card">
+    <h2>⚙ Configuration</h2>
+    <div class="config-row"><label>API URL</label><input id="apiUrl" value="http://localhost:8000"></div>
+    <div class="actions"><button class="btn btn-primary btn-sm" onclick="checkHealth()">Check Health</button></div>
+  </div>
+  <div class="card">
+    <h2>📋 Event Log</h2>
+    <div class="log" id="eventLog">Ready. Click a scenario step to begin.</div>
+  </div>
+  <div class="card full-width">
+    <h2>🔄 Rename Robustness Scenario <span class="badge badge-cyan">DEMO MOMENT 1</span></h2>
+    <p style="font-size:.8rem;color:var(--muted);margin-bottom:.75rem">This scenario proves that the engine preserves operational memory across service renames.</p>
+    <div class="actions">
+      <button class="btn btn-primary" id="step1" onclick="step1()">Step 1: Ingest payments-svc events</button>
+      <button class="btn btn-green" id="step2" onclick="step2()" disabled>Step 2: Resolve incident</button>
+      <button class="btn btn-amber" id="step3" onclick="step3()" disabled>Step 3: Rename → billing-svc</button>
+      <button class="btn btn-primary" id="step4" onclick="step4()" disabled>Step 4: Ingest billing-svc events</button>
+      <button class="btn btn-red" id="step5" onclick="step5()" disabled>Step 5: Trigger incident & reconstruct</button>
+      <button class="btn btn-sm" style="background:var(--surface2);color:var(--muted);margin-left:auto" onclick="resetDemo()">Reset</button>
+    </div>
+  </div>
+  <div class="card full-width">
+    <h2>📊 Reconstruction Result</h2>
+    <div class="result-box"><pre id="resultPre">Run the scenario above to see the reconstructed context here.</pre></div>
+  </div>
+</div>
+<script>
+const API=()=>document.getElementById('apiUrl').value.replace(/\/$/,'');
+const log=(msg,cls='info')=>{const el=document.getElementById('eventLog');el.innerHTML+=`<span class="${cls}">${new Date().toLocaleTimeString()} ${msg}</span>\n`;el.scrollTop=el.scrollHeight};
+const iso=()=>new Date().toISOString();
+let BASE_TS=Date.now();
+const ts=(offset)=>new Date(BASE_TS+offset*1000).toISOString();
+
+async function post(path,body){const r=await fetch(API()+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});return r.json()}
+
+async function checkHealth(){
+  try{const r=await fetch(API()+'/health');const d=await r.json();
+    document.getElementById('statusDot').className='dot dot-green';
+    document.getElementById('statusText').textContent='Connected';
+    document.getElementById('statsText').textContent=`Events: ${d.events_stored} | Episodes: ${d.episodes_indexed} | Uptime: ${d.uptime_seconds}s`;
+    log('Health OK: '+JSON.stringify(d),'ok');
+  }catch(e){document.getElementById('statusDot').className='dot dot-red';document.getElementById('statusText').textContent='Disconnected';log('Health check failed: '+e,'error')}
+}
+
+async function step1(){
+  BASE_TS=Date.now()-600000;
+  log('Ingesting 15 events for payments-svc...','info');
+  const events=[];
+  events.push({ts:ts(0),kind:'deploy',service:'payments-svc',version:'v2.14.0',actor:'ci'});
+  for(let i=1;i<=4;i++) events.push({ts:ts(i*5),kind:'metric',service:'payments-svc',name:'latency_p99_ms',value:1200+i*800});
+  for(let i=1;i<=3;i++) events.push({ts:ts(25+i*3),kind:'log',service:'payments-svc',level:'error',msg:'timeout calling downstream'});
+  events.push({ts:ts(40),kind:'metric',service:'checkout-api',name:'error_rate_pct',value:8.5});
+  for(let i=1;i<=3;i++) events.push({ts:ts(45+i*2),kind:'log',service:'checkout-api',level:'error',msg:'timeout calling payments-svc'});
+  events.push({ts:ts(55),kind:'incident_signal',incident_id:'INC-DEMO-1',trigger:'alert:payments-svc/latency_p99_ms>3000',service:'payments-svc'});
+  for(let i=0;i<3;i++) events.push({ts:ts(56+i),kind:'log',service:'payments-svc',level:'error',msg:'connection refused',incident_id:'INC-DEMO-1'});
+  try{const r=await post('/batch',{events});log(`Step 1 done: ${r.accepted} events accepted`,'ok');document.getElementById('step2').disabled=false}catch(e){log('Step 1 failed: '+e,'error')}
+}
+
+async function step2(){
+  log('Sending remediation (rollback payments-svc)...','info');
+  const events=[{ts:ts(120),kind:'remediation',incident_id:'INC-DEMO-1',action:'rollback',target:'payments-svc',version:'v2.13.4',outcome:'resolved',service:'payments-svc'}];
+  try{const r=await post('/batch',{events});log(`Step 2 done: incident resolved, episode synthesized`,'ok');document.getElementById('step3').disabled=false}catch(e){log('Step 2 failed: '+e,'error')}
+}
+
+async function step3(){
+  log('Sending topology rename: payments-svc → billing-svc...','warn');
+  const events=[{ts:ts(180),kind:'topology',change:'rename',from_:'payments-svc',to:'billing-svc',service:'billing-svc'}];
+  try{const r=await post('/batch',{events});log(`Step 3 done: rename event processed`,'ok');document.getElementById('step4').disabled=false}catch(e){log('Step 3 failed: '+e,'error')}
+}
+
+async function step4(){
+  BASE_TS=Date.now();
+  log('Ingesting similar events under billing-svc...','info');
+  const events=[];
+  events.push({ts:ts(0),kind:'deploy',service:'billing-svc',version:'v2.15.0',actor:'ci'});
+  for(let i=1;i<=4;i++) events.push({ts:ts(i*5),kind:'metric',service:'billing-svc',name:'latency_p99_ms',value:1100+i*900});
+  for(let i=1;i<=3;i++) events.push({ts:ts(25+i*3),kind:'log',service:'billing-svc',level:'error',msg:'timeout calling downstream'});
+  events.push({ts:ts(40),kind:'metric',service:'checkout-api',name:'error_rate_pct',value:9.2});
+  for(let i=1;i<=3;i++) events.push({ts:ts(45+i*2),kind:'log',service:'checkout-api',level:'error',msg:'timeout calling billing-svc'});
+  try{const r=await post('/batch',{events});log(`Step 4 done: ${r.accepted} events accepted`,'ok');document.getElementById('step5').disabled=false}catch(e){log('Step 4 failed: '+e,'error')}
+}
+
+async function step5(){
+  log('Triggering incident on billing-svc and reconstructing context...','warn');
+  const signal={ts:ts(55),kind:'incident_signal',incident_id:'INC-DEMO-2',trigger:'alert:billing-svc/latency_p99_ms>3000',service:'billing-svc'};
+  await post('/batch',{events:[signal]});
+  try{const ctx=await post('/reconstruct?mode=fast',signal);
+    document.getElementById('resultPre').textContent=JSON.stringify(ctx,null,2);
+    const n=ctx.similar_past_incidents?.length||0;
+    const best=ctx.similar_past_incidents?.[0];
+    if(n>0&&best){log(`✅ RENAME ROBUSTNESS CONFIRMED: Found ${n} past match(es). Best: ${best.incident_id} (sim=${best.similarity?.toFixed(3)})`,'ok')}
+    else{log('⚠ No past incidents matched — check episode synthesis','warn')}
+    log(`Explain: ${ctx.explain}`,'info');
+    checkHealth();
+  }catch(e){log('Step 5 failed: '+e,'error')}
+}
+
+function resetDemo(){
+  document.getElementById('eventLog').innerHTML='Demo reset. Click Step 1 to restart.\n';
+  document.getElementById('resultPre').textContent='Run the scenario above to see the reconstructed context here.';
+  ['step2','step3','step4','step5'].forEach(id=>document.getElementById(id).disabled=true);
+}
+</script>
+</body>
+</html>

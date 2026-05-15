@@ -20,18 +20,19 @@ type Flusher struct {
 }
 
 func NewFlusher(rb *RingBuffer, targetURL string, batchSize int, intervalMs int) *Flusher {
-	udsPath := os.Getenv("UDS_PATH")
-	if udsPath == "" {
-		udsPath = "/tmp/pce.sock"
-	}
-
+	udsPath := os.Getenv("PCE_UDS_PATH")
+	
 	dialer := &net.Dialer{
 		Timeout: 5 * time.Second,
 	}
 
 	transport := &http.Transport{
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			return dialer.DialContext(ctx, "unix", udsPath)
+			if udsPath != "" {
+				return dialer.DialContext(ctx, "unix", udsPath)
+			}
+			// Fallback to TCP for Windows
+			return dialer.DialContext(ctx, "tcp", "127.0.0.1:8000")
 		},
 	}
 
