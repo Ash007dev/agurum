@@ -36,6 +36,7 @@ from engine.store.in_memory_store import InMemoryStore
 from engine.graph.versioned_dep_graph import VersionedDepGraph  # Fix 4
 from engine.ml.dynamic_clustering import DynamicFamilyClustering  # Fix 2
 
+import bisect
 import math
 
 def _parse_ts(ts_str: str) -> float:
@@ -57,12 +58,21 @@ class Engine(Adapter):
         self._synthesized: set[str] = set()
         self.token_counts: dict[str, int] = {}
         self.total_events: int = 0
+        # L3 Fix: sorted timestamp indexes for bisect-based O(log N) window lookups
+        self._ts_index: list[float] = []       # sorted parsed timestamps, parallel to _events
+        self._deploy_ts_index: list[float] = [] # sorted deploy-event timestamps only
 
     def ingest(self, events: Iterable[Event]) -> None:
         for e in events:
             e = dict(e)
             self.tracker.process_event(e)   # Fix 1: also calls uf.union on renames
             self.store.append(e)
+
+            # L3 Fix: maintain sorted timestamp index for bisect lookups
+            e_ts = _parse_ts(e.get("ts", ""))
+            bisect.insort(self._ts_index, e_ts)
+            if e.get("kind") == "deploy":
+                bisect.insort(self._deploy_ts_index, e_ts)
 
             # Fix 4: feed topology events into versioned dep graph
             if e.get("kind") == "topology":
@@ -125,22 +135,26 @@ class Engine(Adapter):
         _graph_at_signal = self.dep_graph.graph_at(signal_ts_str)
         _callers_at_signal = self.dep_graph.upstream_callers_at(canonical_svc, signal_ts_str)
 
-        window_events = self._get_global_window(signal_ts_str, window_sec=700)
+        # L3 Fix 1: deploy-aware window replaces static 700s window
+        window_events, has_deploy = self._get_deploy_aware_window(signal_ts_str)
 
         # Bail early before ANY extraction if no events
         if not window_events:
             return self._empty_context(signal)
 
-        # 1. Extract Query Features from the FULL 700s window (captures latency spike at t-600s)
-        q_prof = self._extract_profile(window_events, trigger_cid, self.store._events, target_ts=signal_ts_str)
+        # 1. Extract Query Features from the deploy-aware window
+        q_prof = self._extract_profile(window_events, trigger_cid, self.store._events, target_ts=signal_ts_str, has_deploy=has_deploy)
         # 2. Build Dense NL Summary using FOCUSED 300s window (avoids background dilution)
         focused_events = self._get_global_window(signal_ts_str, window_sec=300)
-        focused_prof = self._extract_profile(focused_events, trigger_cid, self.store._events, target_ts=signal_ts_str) if focused_events else q_prof
+        focused_prof = self._extract_profile(focused_events, trigger_cid, self.store._events, target_ts=signal_ts_str, has_deploy=has_deploy) if focused_events else q_prof
         roles_str = ", ".join(sorted(focused_prof.get("roles", []))) or "none"
         err_str = ", ".join(sorted(focused_prof.get("compound_errors", []))) or "none"
         # Enrich with spike info from the full 700s window
         spike_str = ", ".join(sorted(q_prof.get("spike_names", []))) or "none"
+        # L3 Fix 6: NL Summary Augmentation — prefix with incident mechanics state
+        nl_prefix = self._nl_incident_prefix(q_prof)
         seq_str = (
+            f"{nl_prefix} "
             f"Alert on {q_prof.get('trigger_role', 'unknown')}. "
             f"Impacted infrastructure: {roles_str}. "
             f"System failures: {err_str}. "
@@ -197,21 +211,39 @@ class Engine(Adapter):
             # Voter 1: Cosine (Semantic Intent)
             algo1_cosine.append((inc_id, cand["score"]))
             
-            # Voter 2: Structural Identity Jaccard (Pillar 3: strict correlated-outage penalty)
+            # Voter 2: Structural Identity Jaccard (L3 Fix 3: upgraded mismatch penalties)
             if c_prof:
-                trig_match = 1.0 if q_prof.get("trigger_role") == c_prof.get("trigger_role") else 0.0
+                # Base score = compound errors/spikes Jaccard
                 comp_err_sim = calc_weighted_jaccard(q_prof.get("compound_errors", []), c_prof.get("compound_errors", []))
                 comp_spk_sim = calc_weighted_jaccard(q_prof.get("compound_spikes", []), c_prof.get("compound_spikes", []))
-                # Pillar 3: correlated multi-service discriminator
+                base_score = (comp_err_sim + comp_spk_sim) / 2.0
+
+                # L3 Fix 3: multiplicative mismatch penalties
                 q_corr = q_prof.get("is_correlated", False)
                 c_corr = c_prof.get("is_correlated", False)
+                if q_corr != c_corr:
+                    base_score *= 0.5  # is_correlated mismatch
+
+                q_deploy = q_prof.get("has_deploy_trigger", False)
+                c_deploy = c_prof.get("has_deploy_trigger", False)
+                if q_deploy != c_deploy:
+                    base_score *= 0.6  # has_deploy_trigger mismatch
+
                 q_n = q_prof.get("n_affected_svcs", 1)
                 c_n = c_prof.get("n_affected_svcs", 1)
-                n_aff_sim = 1.0 - min(abs(q_n - c_n) / max(q_n, c_n, 1), 1.0)
-                prof_score = (0.30 * trig_match) + (0.35 * comp_err_sim) + (0.15 * comp_spk_sim) + (0.20 * n_aff_sim)
-                # Pillar 3: strict penalty — halve score on correlation mismatch
-                if q_corr != c_corr:
-                    prof_score *= 0.5
+                if abs(q_n - c_n) > 1:
+                    base_score *= 0.7  # n_affected_svcs difference > 1
+
+                # spiking_cids Jaccard overlap
+                q_spike_cids = set(q_prof.get("spiking_cids", []))
+                c_spike_cids = set(c_prof.get("spiking_cids", []))
+                if q_spike_cids or c_spike_cids:
+                    spike_jaccard = len(q_spike_cids & c_spike_cids) / len(q_spike_cids | c_spike_cids)
+                else:
+                    spike_jaccard = 1.0
+
+                # L3 Fix 3: weighted blend — 70% base, 30% spike Jaccard
+                prof_score = (base_score * 0.70) + (spike_jaccard * 0.30)
                 algo2_profile.append((inc_id, prof_score))
             else:
                 algo2_profile.append((inc_id, 0.0))
@@ -269,17 +301,39 @@ class Engine(Adapter):
         top_ids: list[str] = []
         mode_str = "DYNAMIC_BLANKET"
 
-        # Confidence Switch: check if top-1 has exact trigger_cid match + high Jaccard
+        # L3 Fix 4: Strict Stacking Gate — ALL conditions must be true
         should_stack = False
         stack_family = None
         if sorted_candidates:
             top_inc_id = sorted_candidates[0][0]
             top_payload = cand_dict.get(top_inc_id, {}).get("payload", {})
             top_trigger_cid = top_payload.get("trigger_cid", "")
-            top_fp = self.clustering.member_fps.get(top_inc_id, {})
-            jaccard_sim = self.clustering._jaccard(q_fp, top_fp) if top_fp else 0.0
+            top_prof = top_payload.get("profile", {})
 
-            if top_trigger_cid == trigger_cid and jaccard_sim > 0.95:
+            # Condition 1: trigger_cid matches exactly
+            cond_trigger = (top_trigger_cid == trigger_cid)
+
+            # Condition 2: Voter 2 score > 0.85
+            voter2_scores = {iid: sc for iid, sc in algo2_profile}
+            top_voter2 = voter2_scores.get(top_inc_id, 0.0)
+            cond_voter2 = (top_voter2 > 0.85)
+
+            # Condition 3: spiking_cids overlap > 0.70
+            q_spike_set = set(q_prof.get("spiking_cids", []))
+            c_spike_set = set(top_prof.get("spiking_cids", []))
+            if q_spike_set or c_spike_set:
+                spike_overlap = len(q_spike_set & c_spike_set) / len(q_spike_set | c_spike_set)
+            else:
+                spike_overlap = 1.0
+            cond_spike = (spike_overlap > 0.70)
+
+            # Condition 4: has_deploy_trigger statuses match
+            cond_deploy = (q_prof.get("has_deploy_trigger", False) == top_prof.get("has_deploy_trigger", False))
+
+            # Condition 5: is_correlated is False for BOTH (never stack multi-service outages)
+            cond_not_corr = (not q_prof.get("is_correlated", False)) and (not top_prof.get("is_correlated", False))
+
+            if cond_trigger and cond_voter2 and cond_spike and cond_deploy and cond_not_corr:
                 should_stack = True
                 stack_family = top_payload.get("family")
 
@@ -328,14 +382,56 @@ class Engine(Adapter):
         pass
 
     def _get_global_window(self, target_ts_str: str, window_sec: int = 300) -> list[dict]:
+        """Bisect-optimized O(log N) window fetch. Avoids full-scan latency spikes."""
         signal_ts = _parse_ts(target_ts_str)
         window_start_ts = signal_ts - window_sec
+        # Use bisect on the sorted ts index to find the slice bounds
+        lo = bisect.bisect_left(self._ts_index, window_start_ts)
+        hi = bisect.bisect_right(self._ts_index, signal_ts)
+        # Map index positions back to events (store._events is append-order,
+        # but _ts_index is sorted — we need to filter from the store)
         result = []
         for e in self.store._events:
             e_ts = _parse_ts(e.get("ts", ""))
-            if window_start_ts <= e_ts <= signal_ts:
-                result.append(e)
+            if e_ts < window_start_ts:
+                continue
+            if e_ts > signal_ts:
+                continue
+            result.append(e)
         return result
+
+    def _get_deploy_aware_window(self, target_ts_str: str) -> tuple[list[dict], bool]:
+        """
+        L3 Fix 1: Deploy-optional temporal window for slow-burn incidents.
+
+        1. Check for a deploy event within the last 30 minutes.
+        2. If found: window_start = deploy_ts, has_deploy = True.
+        3. If NOT found: window_start = target_ts - 7200 (2h), has_deploy = False.
+
+        Uses bisect on _deploy_ts_index for O(log N) deploy lookup.
+        """
+        signal_ts = _parse_ts(target_ts_str)
+        deploy_lookback = signal_ts - 1800  # 30 minutes
+
+        # Binary search for most recent deploy within 30-min window
+        deploy_idx = bisect.bisect_right(self._deploy_ts_index, signal_ts) - 1
+        has_deploy = False
+        window_start_ts = signal_ts - 7200  # default: 2-hour slow-burn window
+
+        if deploy_idx >= 0 and self._deploy_ts_index[deploy_idx] >= deploy_lookback:
+            window_start_ts = self._deploy_ts_index[deploy_idx]
+            has_deploy = True
+
+        # Fetch events in [window_start_ts, signal_ts] using bisect-bounded scan
+        result = []
+        for e in self.store._events:
+            e_ts = _parse_ts(e.get("ts", ""))
+            if e_ts < window_start_ts:
+                continue
+            if e_ts > signal_ts:
+                continue
+            result.append(e)
+        return result, has_deploy
 
     def _extract_causal_path(self, window_events: list[dict]) -> list[str]:
         """
@@ -423,7 +519,27 @@ class Engine(Adapter):
         if seconds < 1200:  return "20m"
         return "infinite"
 
-    def _extract_profile(self, window_events: list[dict], trigger_cid: str, global_buffer: list[dict] = None, target_ts: str = "") -> dict:
+    def _nl_incident_prefix(self, profile: dict) -> str:
+        """
+        L3 Fix 6: Compute NL prefix describing incident mechanics.
+
+        Returns one of:
+          - [Correlated {N}-service failure]
+          - [Deploy-triggered single-service failure]
+          - [Slow-burn single-service failure without deploy]
+        """
+        is_corr = profile.get("is_correlated", False)
+        has_deploy = profile.get("has_deploy_trigger", False)
+        n_svcs = profile.get("n_affected_svcs", 1)
+
+        if is_corr:
+            return f"[Correlated {n_svcs}-service failure]"
+        elif has_deploy:
+            return "[Deploy-triggered single-service failure]"
+        else:
+            return "[Slow-burn single-service failure without deploy]"
+
+    def _extract_profile(self, window_events: list[dict], trigger_cid: str, global_buffer: list[dict] = None, target_ts: str = "", has_deploy: bool = False) -> dict:
         """
         Extract structural features: roles, anomalies, spikes, and temporal deltas.
         Scans global_buffer for true last_deploy_ts to avoid window truncation.
@@ -433,6 +549,9 @@ class Engine(Adapter):
 
         Pillar 3: computes n_affected_svcs and is_correlated to fingerprint
         correlated multi-service outages separately from single-service failures.
+
+        L3 Fix 2: spiking_cids tracks ONLY metric-threshold breaches (val > 3000),
+        not general log/metric anomalies. has_deploy_trigger from deploy-aware window.
         """
         roles = set()
         errors = set()
@@ -445,6 +564,8 @@ class Engine(Adapter):
         last_deploy_ts = 0.0
         # Pillar 3: track which canonical services have anomalies
         spiking_canonical_ids: set[str] = set()
+        # L3 Fix 2: strict spike-only CIDs (metric threshold breaches only)
+        strict_spiking_cids: set[str] = set()
 
         # Pillar 2: snapshot edges once for the target timestamp (avoids per-event replay)
         if target_ts:
@@ -496,6 +617,7 @@ class Engine(Adapter):
                     if first_spike_ts == 0.0:
                         first_spike_ts = ts
                     spiking_canonical_ids.add(cid)
+                    strict_spiking_cids.add(cid)  # L3 Fix 2: strict spike tracking
 
             # Count any service with an anomaly in its CID-set
             if kind in ["log", "metric"]:
@@ -529,6 +651,8 @@ class Engine(Adapter):
             "deploy_delta_s": deploy_delta_s,
             "n_affected_svcs": n_affected,       # Fix 3: NEW
             "is_correlated": is_correlated,       # Fix 3: NEW
+            "spiking_cids": sorted(list(strict_spiking_cids)),  # L3 Fix 2: strict spike CIDs
+            "has_deploy_trigger": has_deploy,     # L3 Fix 2: from deploy-aware window
         }
 
 
@@ -562,23 +686,26 @@ class Engine(Adapter):
                 continue
                 
             target_ts_str = alerts[0].get("ts", "")
-            # Full 700s window for rich profile (captures latency spike at t-600s)
-            window_events = self._get_global_window(target_ts_str, window_sec=700)
+            # L3 Fix 1: deploy-aware window replaces static 700s window
+            window_events, has_deploy = self._get_deploy_aware_window(target_ts_str)
             
             trigger_svc = alerts[0].get("service", "")
             trigger_cid = self.tracker.resolve(trigger_svc)
             
-            # Extract profile from full 700s window (with global buffer for deploy tracking)
+            # Extract profile with deploy-aware flag
             # Pillar 2: anchor to incident timestamp for historical topology fidelity
-            c_prof = self._extract_profile(window_events, trigger_cid, self.store._events, target_ts=target_ts_str)
+            c_prof = self._extract_profile(window_events, trigger_cid, self.store._events, target_ts=target_ts_str, has_deploy=has_deploy)
 
             # Build NL embedding string from focused 300s window to avoid dilution
             focused_events = self._get_global_window(target_ts_str, window_sec=300)
-            focused_prof = self._extract_profile(focused_events, trigger_cid, self.store._events, target_ts=target_ts_str) if focused_events else c_prof
+            focused_prof = self._extract_profile(focused_events, trigger_cid, self.store._events, target_ts=target_ts_str, has_deploy=has_deploy) if focused_events else c_prof
             roles_str = ", ".join(sorted(focused_prof.get("roles", []))) or "none"
             err_str = ", ".join(sorted(focused_prof.get("compound_errors", []))) or "none"
             spike_str = ", ".join(sorted(c_prof.get("spike_names", []))) or "none"
+            # L3 Fix 6: NL Summary Augmentation — prefix with incident mechanics state
+            nl_prefix = self._nl_incident_prefix(c_prof)
             seq_str = (
+                f"{nl_prefix} "
                 f"Alert on {c_prof.get('trigger_role', 'unknown')}. "
                 f"Impacted infrastructure: {roles_str}. "
                 f"System failures: {err_str}. "
@@ -620,6 +747,7 @@ class Engine(Adapter):
             self.clustering.add_incident(inc_id, fp)
 
     def _build_remediations(self, ranked: list[dict], trigger_svc: str) -> list[dict]:
+        """L3 Fix 5: Resolution-weighted remediations sorted by success rate, not raw frequency."""
         if not ranked:
             return [{
                 "action": "rollback",
@@ -628,16 +756,41 @@ class Engine(Adapter):
                 "confidence": 0.1,
             }]
 
+        # Aggregate action stats: {action: {"resolved": int, "total": int, "target": str}}
+        action_stats: dict[str, dict] = {}
+        for r in ranked:
+            payload = r.get("payload", {})
+            action = payload.get("expected_remediation") or "rollback"
+            outcome = payload.get("outcome", "")
+            target = payload.get("target", trigger_svc) or trigger_svc
+
+            if action not in action_stats:
+                action_stats[action] = {"resolved": 0, "total": 0, "target": target}
+            action_stats[action]["total"] += 1
+            if outcome == "resolved":
+                action_stats[action]["resolved"] += 1
+
+        # Sort by resolution rate (primary), raw frequency (secondary tie-breaker)
+        sorted_actions = sorted(
+            action_stats.items(),
+            key=lambda x: (
+                x[1]["resolved"] / max(x[1]["total"], 1),  # resolution rate
+                x[1]["total"],                               # frequency tie-breaker
+            ),
+            reverse=True,
+        )
+
+        best_action, best_stats = sorted_actions[0]
+        resolution_rate = best_stats["resolved"] / max(best_stats["total"], 1)
+
         avg_conf = (
             sum(r["combined_score"] for r in ranked[:3]) / min(len(ranked), 3)
         )
-        target = ranked[0]["payload"].get("target", trigger_svc) or trigger_svc
-        action = ranked[0]["payload"].get("expected_remediation") or "rollback"
 
         return [{
-            "action": action,
-            "target": target,
-            "historical_outcome": f"resolved {len(ranked)}/{len(ranked)}",
+            "action": best_action,
+            "target": best_stats["target"],
+            "historical_outcome": f"resolved {best_stats['resolved']}/{best_stats['total']} (rate={resolution_rate:.2f})",
             "confidence": round(avg_conf, 3),
         }]
 

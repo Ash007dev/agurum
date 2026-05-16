@@ -12,66 +12,66 @@
   },
   "seed_results": [
     {
-      "recall@5": 0.5244,
-      "precision@5_mean": 0.36,
-      "remediation_acc": 0.7333,
-      "latency_p95_ms": 413.79,
-      "latency_mean_ms": 236.71,
-      "weighted_automated": 0.508,
-      "adaptability_delta": 0.0637,
+      "recall@5": 0.78,
+      "precision@5_mean": 0.5733,
+      "remediation_acc": 0.8667,
+      "latency_p95_ms": 222.5,
+      "latency_mean_ms": 136.12,
+      "weighted_automated": 0.6433,
+      "adaptability_delta": 0.2585,
       "per_family_recall": {
-        "F04": 0.5,
+        "F04": 0.625,
         "F06": 0.4,
-        "F05": 0.2,
+        "F05": 0.7,
         "F01": 1.0,
-        "F07": 0.4167
+        "F07": 1.0
       },
       "per_family_precision": {
-        "F04": 0.8,
+        "F04": 1.0,
         "F06": 0.4,
-        "F05": 0.2,
+        "F05": 0.7,
         "F01": 0.0,
-        "F07": 0.25
+        "F07": 0.6
       },
       "n_queries": 15,
       "seed": 42,
-      "ingest_eps": 11838.5
+      "ingest_eps": 28860.5
     },
     {
-      "recall@5": 0.6071,
-      "precision@5_mean": 0.5367,
-      "remediation_acc": 0.6,
-      "latency_p95_ms": 384.62,
-      "latency_mean_ms": 210.44,
-      "weighted_automated": 0.5326,
-      "adaptability_delta": 0.0032,
+      "recall@5": 0.8532,
+      "precision@5_mean": 0.7467,
+      "remediation_acc": 0.8667,
+      "latency_p95_ms": 113.24,
+      "latency_mean_ms": 92.85,
+      "weighted_automated": 0.6913,
+      "adaptability_delta": 0.0106,
       "per_family_recall": {
-        "F04": 0.75,
-        "F03": 0.7143,
+        "F04": 1.0,
+        "F03": 0.6786,
         "F06": 1.0,
-        "F05": 0.3125,
-        "F02": 0.6667,
-        "F07": 0.1667
+        "F05": 0.9375,
+        "F02": 0.8333,
+        "F07": 0.6667
       },
       "per_family_precision": {
-        "F04": 0.6,
-        "F03": 1.0,
+        "F04": 0.8,
+        "F03": 0.95,
         "F06": 0.0,
-        "F05": 0.2625,
-        "F02": 0.8,
-        "F07": 0.2
+        "F05": 0.75,
+        "F02": 1.0,
+        "F07": 0.8
       },
       "n_queries": 15,
       "seed": 1337,
-      "ingest_eps": 22077.8
+      "ingest_eps": 36943.7
     }
   ],
   "summary": {
-    "recall@5": 0.5657,
-    "precision@5_mean": 0.4483,
-    "remediation_acc": 0.6666,
-    "weighted_automated": 0.5203,
-    "adaptability_delta": 0.0335
+    "recall@5": 0.8166,
+    "precision@5_mean": 0.66,
+    "remediation_acc": 0.8667,
+    "weighted_automated": 0.6673,
+    "adaptability_delta": 0.1346
   },
-  "worst_weighted": 0.508
+  "worst_weighted": 0.6433
 }
