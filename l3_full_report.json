@@ -13,17 +13,17 @@
   },
   "seed_results": [
     {
-      "recall@5": 0.8117,
+      "recall@5": 0.815,
       "precision@5_mean": 0.58,
-      "remediation_acc": 0.8,
-      "latency_p95_ms": 333.44,
-      "latency_mean_ms": 214.51,
-      "weighted_automated": 0.6405,
-      "adaptability_delta": 0.0967,
+      "remediation_acc": 0.85,
+      "latency_p95_ms": 288.11,
+      "latency_mean_ms": 217.38,
+      "weighted_automated": 0.6515,
+      "adaptability_delta": 0.13,
       "per_family_recall": {
-        "F04": 0.85,
+        "F04": 0.95,
         "F06": 1.0,
-        "F07": 0.6667,
+        "F07": 0.5556,
         "F10": 1.0,
         "F08": 0.0,
         "F01": 0.8333,
@@ -32,9 +32,9 @@
         "F03": 1.0
       },
       "per_family_precision": {
-        "F04": 0.85,
+        "F04": 0.95,
         "F06": 0.4,
-        "F07": 0.8,
+        "F07": 0.6667,
         "F10": 0.2,
         "F08": 0.0,
         "F01": 1.0,
@@ -44,18 +44,18 @@
       },
       "n_queries": 20,
       "seed": 42,
-      "ingest_eps": 30726.6
+      "ingest_eps": 29047.9
     },
     {
-      "recall@5": 0.7994,
-      "precision@5_mean": 0.65,
-      "remediation_acc": 0.75,
-      "latency_p95_ms": 331.86,
-      "latency_mean_ms": 208.91,
-      "weighted_automated": 0.6373,
-      "adaptability_delta": 0.006,
+      "recall@5": 0.7744,
+      "precision@5_mean": 0.63,
+      "remediation_acc": 0.7,
+      "latency_p95_ms": 320.91,
+      "latency_mean_ms": 205.18,
+      "weighted_automated": 0.6168,
+      "adaptability_delta": 0.044,
       "per_family_recall": {
-        "F05": 0.5,
+        "F05": 0.25,
         "F08": 0.7143,
         "F06": 1.0,
         "F09": 1.0,
@@ -66,7 +66,7 @@
         "F10": 1.0
       },
       "per_family_precision": {
-        "F05": 0.4,
+        "F05": 0.2,
         "F08": 1.0,
         "F06": 0.2,
         "F09": 0.6,
@@ -78,47 +78,47 @@
       },
       "n_queries": 20,
       "seed": 1337,
-      "ingest_eps": 34381.8
+      "ingest_eps": 30401.0
     },
     {
-      "recall@5": 0.6833,
+      "recall@5": 0.6583,
       "precision@5_mean": 0.6,
-      "remediation_acc": 0.85,
-      "latency_p95_ms": 275.54,
-      "latency_mean_ms": 175.58,
-      "weighted_automated": 0.615,
-      "adaptability_delta": 0.0,
+      "remediation_acc": 0.8,
+      "latency_p95_ms": 318.21,
+      "latency_mean_ms": 224.13,
+      "weighted_automated": 0.5975,
+      "adaptability_delta": 0.0167,
       "per_family_recall": {
         "F07": 0.5556,
-        "F05": 0.8333,
+        "F05": 0.5833,
         "F09": 0.6667,
         "F03": 1.0,
         "F02": 1.0,
-        "F10": 0.4583,
+        "F10": 0.5833,
         "F08": 0.6111,
         "F04": 1.0
       },
       "per_family_precision": {
         "F07": 0.6667,
-        "F05": 0.5,
+        "F05": 0.35,
         "F09": 0.6667,
         "F03": 0.6,
         "F02": 0.4,
-        "F10": 0.55,
+        "F10": 0.7,
         "F08": 0.7333,
         "F04": 0.6
       },
       "n_queries": 20,
       "seed": 9919,
-      "ingest_eps": 31304.5
+      "ingest_eps": 27101.8
     }
   ],
   "summary": {
-    "recall@5": 0.7648,
-    "precision@5_mean": 0.61,
-    "remediation_acc": 0.8,
-    "weighted_automated": 0.6309,
-    "adaptability_delta": 0.0342
+    "recall@5": 0.7492,
+    "precision@5_mean": 0.6033,
+    "remediation_acc": 0.7833,
+    "weighted_automated": 0.6219,
+    "adaptability_delta": 0.0636
   },
-  "worst_weighted": 0.615
+  "worst_weighted": 0.5975
 }

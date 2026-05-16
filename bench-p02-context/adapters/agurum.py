@@ -153,8 +153,11 @@ class Engine(Adapter):
         spike_str = ", ".join(sorted(q_prof.get("spike_names", []))) or "none"
         # L3 Fix 6: NL Summary Augmentation — prefix with incident mechanics state
         nl_prefix = self._nl_incident_prefix(q_prof)
+        spiking_svc_str = ", ".join(sorted(q_prof.get("spiking_cids", []))) or "none"
         seq_str = (
             f"{nl_prefix} "
+            f"Trigger service: {q_prof.get('trigger_cid', 'unknown')}. "
+            f"Impacted services: {spiking_svc_str}. "
             f"Alert on {q_prof.get('trigger_role', 'unknown')}. "
             f"Impacted infrastructure: {roles_str}. "
             f"System failures: {err_str}. "
@@ -162,8 +165,8 @@ class Engine(Adapter):
         )
         seq_vec = self.embedder.encode_single(seq_str)
 
-        # 3. Expand the Initial Net to top_k=100
-        candidates = self.index.recall(seq_vec, top_k=100)
+        # 3. Expand the Initial Net — consume latency headroom for recall
+        candidates = self.index.recall(seq_vec, top_k=250)
         
         def calc_weighted_jaccard(l1, l2):
             s1, s2 = set(l1), set(l2)
@@ -211,39 +214,20 @@ class Engine(Adapter):
             # Voter 1: Cosine (Semantic Intent)
             algo1_cosine.append((inc_id, cand["score"]))
             
-            # Voter 2: Structural Identity Jaccard (L3 Fix 3: upgraded mismatch penalties)
+            # Voter 2: Structural Identity Jaccard (softened — no boolean-flip penalties)
             if c_prof:
-                # Base score = compound errors/spikes Jaccard
+                # Base Jaccard = compound errors + compound spikes average
                 comp_err_sim = calc_weighted_jaccard(q_prof.get("compound_errors", []), c_prof.get("compound_errors", []))
                 comp_spk_sim = calc_weighted_jaccard(q_prof.get("compound_spikes", []), c_prof.get("compound_spikes", []))
-                base_score = (comp_err_sim + comp_spk_sim) / 2.0
-
-                # L3 Fix 3: multiplicative mismatch penalties
-                q_corr = q_prof.get("is_correlated", False)
-                c_corr = c_prof.get("is_correlated", False)
-                if q_corr != c_corr:
-                    base_score *= 0.5  # is_correlated mismatch
-
-                q_deploy = q_prof.get("has_deploy_trigger", False)
-                c_deploy = c_prof.get("has_deploy_trigger", False)
-                if q_deploy != c_deploy:
-                    base_score *= 0.6  # has_deploy_trigger mismatch
-
-                q_n = q_prof.get("n_affected_svcs", 1)
-                c_n = c_prof.get("n_affected_svcs", 1)
-                if abs(q_n - c_n) > 1:
-                    base_score *= 0.7  # n_affected_svcs difference > 1
+                base_jaccard = (comp_err_sim + comp_spk_sim) / 2.0
 
                 # spiking_cids Jaccard overlap
-                q_spike_cids = set(q_prof.get("spiking_cids", []))
-                c_spike_cids = set(c_prof.get("spiking_cids", []))
-                if q_spike_cids or c_spike_cids:
-                    spike_jaccard = len(q_spike_cids & c_spike_cids) / len(q_spike_cids | c_spike_cids)
-                else:
-                    spike_jaccard = 1.0
+                q_s = set(q_prof.get("spiking_cids", []))
+                c_s = set(c_prof.get("spiking_cids", []))
+                cid_jaccard = len(q_s & c_s) / len(q_s | c_s) if (q_s or c_s) else 1.0
 
-                # L3 Fix 3: weighted blend — 70% base, 30% spike Jaccard
-                prof_score = (base_score * 0.70) + (spike_jaccard * 0.30)
+                # Smooth additive blend — no destructive boolean-flip multipliers
+                prof_score = (base_jaccard * 0.60) + (cid_jaccard * 0.40)
                 algo2_profile.append((inc_id, prof_score))
             else:
                 algo2_profile.append((inc_id, 0.0))
@@ -577,8 +561,10 @@ class Engine(Adapter):
         for e in window_events:
             ts = _parse_ts(e.get("ts", ""))
             kind = e.get("kind", "")
-            # Resolve canonical mapping with "unknown" fallback — never silently skip
-            cid = self.tracker.resolve(e.get("service", "unknown") or e.get("name", "unknown") or "unknown")
+            # Bulletproof canonical resolution: always path-compress through UnionFind
+            raw_svc = e.get("service", "unknown") or e.get("name", "unknown") or "unknown"
+            canonical_svc = self.tracker.uf.canonical(raw_svc)
+            cid = self.tracker.resolve(canonical_svc)
             role = _role(cid)
             roles.add(role)
             if cid == trigger_cid:
@@ -704,8 +690,11 @@ class Engine(Adapter):
             spike_str = ", ".join(sorted(c_prof.get("spike_names", []))) or "none"
             # L3 Fix 6: NL Summary Augmentation — prefix with incident mechanics state
             nl_prefix = self._nl_incident_prefix(c_prof)
+            spiking_svc_str = ", ".join(sorted(c_prof.get("spiking_cids", []))) or "none"
             seq_str = (
                 f"{nl_prefix} "
+                f"Trigger service: {c_prof.get('trigger_cid', 'unknown')}. "
+                f"Impacted services: {spiking_svc_str}. "
                 f"Alert on {c_prof.get('trigger_role', 'unknown')}. "
                 f"Impacted infrastructure: {roles_str}. "
                 f"System failures: {err_str}. "
