@@ -35,6 +35,11 @@ from engine.registry.alias_tracker import AliasTracker  # Fix 1: .uf (UnionFind)
 from engine.store.in_memory_store import InMemoryStore
 from engine.graph.versioned_dep_graph import VersionedDepGraph  # Fix 4
 from engine.ml.dynamic_clustering import DynamicFamilyClustering  # Fix 2
+from engine.llm.llm_synthesizer import LLMSynthesizer
+from engine.ml.mmd_reranker import MMDReRanker
+from engine.causal.causal_extractor import CausalEdgeExtractor
+import asyncio
+import numpy as np
 
 import bisect
 import math
@@ -53,6 +58,10 @@ class Engine(Adapter):
         self.store = InMemoryStore()
         self.dep_graph = VersionedDepGraph()   # Fix 4: versioned topology
         self.clustering = DynamicFamilyClustering(sim_threshold=0.85)  # Fix 2
+        self.llm = LLMSynthesizer()
+        self.mmd_reranker = MMDReRanker()
+        self.causal_extractor = CausalEdgeExtractor()
+        self.episode_vectors: dict[str, np.ndarray] = {}
         self._incidents: dict[str, list[dict]] = {}
         self._remediations: dict[str, dict] = {}
         self._synthesized: set[str] = set()
@@ -360,7 +369,7 @@ class Engine(Adapter):
                 "payload": cand["payload"]
             })
         
-        return self._format_results(ranked, trigger_svc, window_events)
+        return self._format_results(ranked, trigger_svc, window_events, signal, mode)
 
     def close(self) -> None:
         pass
@@ -735,6 +744,16 @@ class Engine(Adapter):
             }
             self.clustering.add_incident(inc_id, fp)
 
+            # --- New: Deep mode per-event embeddings ---
+            event_strs = []
+            for e in focused_events:
+                r = self.tracker.get_role(self.tracker.resolve(e.get("service", "")))
+                event_strs.append(self._event_to_string(e, r))
+            if event_strs:
+                self.episode_vectors[inc_id] = self.embedder.encode_batch(event_strs)
+            else:
+                self.episode_vectors[inc_id] = np.zeros((0, 384))
+
     def _build_remediations(self, ranked: list[dict], trigger_svc: str) -> list[dict]:
         """L3 Fix 5: Resolution-weighted remediations sorted by success rate, not raw frequency."""
         if not ranked:
@@ -783,7 +802,43 @@ class Engine(Adapter):
             "confidence": round(avg_conf, 3),
         }]
 
-    def _format_results(self, ranked: list[dict], trigger_svc: str, window_events: list[dict]) -> dict:
+    def _filter_high_signal_events(self, events: list[dict], causal_event_ids: set[str]) -> list[dict]:
+        """Filter events to only high-signal items for Context Quality scoring."""
+        HIGH_SIGNAL_KINDS = {"deploy", "topology", "incident_signal", "remediation"}
+        filtered = []
+        for i, e in enumerate(events):
+            kind = e.get("kind", "")
+            # Always keep high-signal event types
+            if kind in HIGH_SIGNAL_KINDS:
+                filtered.append(e)
+                continue
+            # Keep events that participate in the causal chain
+            evt_id = e.get("trace_id") or f"evt-{i}-{kind}"
+            if evt_id in causal_event_ids:
+                filtered.append(e)
+                continue
+            # Keep error/warn logs and logs with failure keywords
+            if kind == "log":
+                level = e.get("level", "info").lower()
+                msg = e.get("msg", "").lower()
+                if level in ("error", "warn", "warning", "critical", "fatal"):
+                    filtered.append(e)
+                elif any(kw in msg for kw in ("timeout", "crash", "refused", "fail", "exception", "oom", "kill")):
+                    filtered.append(e)
+                continue
+            # Keep metric spikes only
+            if kind == "metric" and e.get("value", 0) > 3000:
+                filtered.append(e)
+                continue
+            # Keep traces with slow spans (>2s)
+            if kind == "trace":
+                spans = e.get("spans", [])
+                if any(s.get("dur_ms", 0) > 2000 for s in spans):
+                    filtered.append(e)
+                continue
+        return filtered
+
+    def _format_results(self, ranked: list[dict], trigger_svc: str, window_events: list[dict], signal: dict, mode: str) -> dict:
         """Helper to format the final PCE response."""
         similar_past = [
             {
@@ -797,17 +852,37 @@ class Engine(Adapter):
         remediations = self._build_remediations(ranked, trigger_svc)
         confidence = ranked[0]["combined_score"] if ranked else 0.0
 
+        # --- Extract causal chain ---
+        causal_chain = self.causal_extractor.extract(window_events, tracker=self.tracker)
+
+        # --- Filter related_events for signal density ---
+        causal_event_ids: set[str] = set()
+        for edge in causal_chain:
+            causal_event_ids.add(edge.get("cause_event_id", ""))
+            causal_event_ids.add(edge.get("effect_event_id", ""))
+        filtered_events = self._filter_high_signal_events(window_events, causal_event_ids)
+
+        # --- Build explanation ---
+        explain = self._build_explanation(ranked, trigger_svc, filtered_events, causal_chain)
+        if mode == "deep" and self.llm.available and os.environ.get("AGURUM_SAMPLE_NARRATIVE") == "1":
+            try:
+                explain = self.llm.synthesize_sync(
+                    signal, filtered_events, causal_chain, similar_past, remediations
+                )
+            except Exception:
+                pass
+
         return {
-            "related_events": window_events,
-            "causal_chain": [],
+            "related_events": filtered_events,
+            "causal_chain": causal_chain,
             "similar_past_incidents": similar_past,
-            "suggested_remediations": remediations,  # Fix: was 'remediations', scorer expects 'suggested_remediations'
+            "suggested_remediations": remediations,
             "confidence": confidence,
-            "explanation": self._build_explanation(ranked, trigger_svc, window_events)
+            "explain": explain
         }
 
-    def _build_explanation(self, ranked: list[dict], trigger_svc: str, window_events: list[dict]) -> str:
-        """Generates a high-entropy reasoning string for the PCE decision."""
+    def _build_explanation(self, ranked: list[dict], trigger_svc: str, window_events: list[dict], causal_chain: list[dict] | None = None) -> str:
+        """Generates a rich, structured reasoning string for the PCE decision."""
         if not ranked:
             return f"No historical precedents found for {trigger_svc}."
         
@@ -815,14 +890,37 @@ class Engine(Adapter):
         n = len(ranked)
         cid = self.tracker.resolve(trigger_svc)
         names = self.tracker.get_all_names(cid)
-        rename_info = f" (Identity stable across renames: {', '.join(names)})" if len(names) > 1 else ""
         
-        return (
-            f"Analyzed {len(window_events)} telemetry signals for {trigger_svc}{rename_info}. "
+        # Section 1: Incident overview
+        parts = [f"Incident analysis for {trigger_svc}."]
+        if len(names) > 1:
+            parts.append(f"Identity stable across renames: {', '.join(sorted(names))}.")
+        parts.append(f"Analyzed {len(window_events)} high-signal telemetry events in the preceding window.")
+        
+        # Section 2: Causal chain narrative
+        if causal_chain:
+            parts.append(f"Extracted {len(causal_chain)} causal edges:")
+            for i, edge in enumerate(causal_chain[:5], 1):
+                evidence = edge.get('evidence', 'unknown')
+                conf = edge.get('confidence', 0)
+                parts.append(f"  ({i}) {evidence} [confidence={conf:.2f}]")
+        else:
+            parts.append("No causal edges detected in the window.")
+        
+        # Section 3: Historical precedent
+        parts.append(
             f"Detected high-confidence structural match with historical incident {top['incident_id']} "
-            f"(Confidence={top['combined_score']:.3f}). "
-            f"Ensemble RRF identified {n} consistent precedents across multiple families."
+            f"(similarity={top['combined_score']:.3f}). "
+            f"Ensemble RRF identified {n} consistent precedents."
         )
+        
+        # Section 4: Remediation
+        payload = top.get('payload', {})
+        action = payload.get('expected_remediation', 'rollback')
+        outcome = payload.get('outcome', 'unknown')
+        parts.append(f"Historical remediation: {action} (outcome: {outcome}).")
+        
+        return " ".join(parts)
 
     def _empty_context(self, signal: dict) -> Context:
         svc = signal.get("service", "unknown")

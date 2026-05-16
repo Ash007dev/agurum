@@ -172,6 +172,7 @@ def main():
 
     # Load adapter
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "bench-p02-context"))
     AdapterClass = load_adapter(args.adapter)
 
     print(f"\nANVIL · L3 MOCK BENCHMARK")
@@ -254,6 +255,29 @@ def main():
         json.dump(report, f, indent=2)
     print(f"\nReport saved to {args.out}")
 
+
+    if args.mode == "deep":
+        print("\n" + "="*60)
+        print("GENERATING SAMPLED NARRATIVE FOR MANUAL PANEL GRADING...")
+        print("="*60)
+        os.environ["AGURUM_SAMPLE_NARRATIVE"] = "1"
+        try:
+            gen = L3Generator(seed=999, n_services=15, days=7, n_families=5, n_train_incidents=15, n_eval_incidents=1)
+            events, eval_signals, gt = gen.generate()
+            adapter = AdapterClass()
+            adapter.ingest(events)
+            ctx = adapter.reconstruct_context(eval_signals[0], mode="deep")
+            
+            print("\n--- CAUSAL CHAIN ---")
+            for edge in ctx.get("causal_chain", []):
+                print(f"  • {edge}")
+                
+            print("\n--- SRE LLM NARRATIVE ---")
+            print(ctx.get("explain", "No explanation generated."))
+            adapter.close()
+            print("\n" + "="*60)
+        except Exception as e:
+            print(f"Failed to generate sampled narrative: {e}")
 
 if __name__ == "__main__":
     main()
