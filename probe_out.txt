@@ -1,0 +1,171 @@
+
+FAMILY TWIN DIAGNOSTIC — seed=42
+======================================================================
+
+[PROBE] INC-EVAL-42-0000 | MODE=EXPLICIT_CLUSTER(sim=0.67) | GAP=0.0050
+  Top 5 Families: [2, 2, 2, 2, 5]
+  Voters: V3=1.00 V5=0.53 V7=1.00
+----------------------------------------
+
+[PROBE] INC-EVAL-42-0001 | MODE=EXPLICIT_CLUSTER(sim=0.67) | GAP=0.0116
+  Top 5 Families: [4, 4, 4, 4, 4]
+  Voters: V3=1.00 V5=0.99 V7=1.00
+----------------------------------------
+
+[PROBE] INC-EVAL-42-0002 | MODE=EXPLICIT_CLUSTER(sim=0.67) | GAP=0.0037
+  Top 5 Families: [5, 5, 2, 4, 2]
+  Voters: V3=1.00 V5=0.98 V7=1.00
+----------------------------------------
+
+[PROBE] INC-EVAL-42-0003 | MODE=EXPLICIT_CLUSTER(sim=0.67) | GAP=0.0076
+  Top 5 Families: [1, 1, 1, 1, 1]
+  Voters: V3=0.00 V5=1.00 V7=1.00
+----------------------------------------
+
+[PROBE] INC-EVAL-42-0004 | MODE=EXPLICIT_CLUSTER(sim=0.67) | GAP=0.0078
+  Top 5 Families: [4, 4, 4, 4, 4]
+  Voters: V3=1.00 V5=0.95 V7=1.00
+----------------------------------------
+
+[PROBE] INC-EVAL-42-0005 | MODE=EXPLICIT_CLUSTER(sim=0.67) | GAP=0.0101
+  Top 5 Families: [4, 4, 4, 4, 4]
+  Voters: V3=1.00 V5=1.00 V7=1.00
+----------------------------------------
+
+[PROBE] INC-EVAL-42-0006 | MODE=EXPLICIT_CLUSTER(sim=1.00) | GAP=0.0076
+  Top 5 Families: [1, 1, 1, 1, 1]
+  Voters: V3=0.00 V5=1.00 V7=1.00
+----------------------------------------
+
+[PROBE] INC-EVAL-42-0007 | MODE=EXPLICIT_CLUSTER(sim=0.67) | GAP=0.0076
+  Top 5 Families: [1, 1, 1, 1, 1]
+  Voters: V3=0.00 V5=1.00 V7=1.00
+----------------------------------------
+
+[PROBE] INC-EVAL-42-0008 | MODE=EXPLICIT_CLUSTER(sim=0.67) | GAP=0.0087
+  Top 5 Families: [4, 4, 4, 4, 4]
+  Voters: V3=1.00 V5=0.94 V7=1.00
+----------------------------------------
+
+[PROBE] INC-EVAL-42-0009 | MODE=EXPLICIT_CLUSTER(sim=0.67) | GAP=0.0076
+  Top 5 Families: [1, 1, 1, 1, 1]
+  Voters: V3=0.00 V5=1.00 V7=1.00
+----------------------------------------
+
+[PROBE] INC-EVAL-42-0010 | MODE=EXPLICIT_CLUSTER(sim=0.67) | GAP=0.0050
+  Top 5 Families: [2, 2, 2, 2, 5]
+  Voters: V3=1.00 V5=0.57 V7=1.00
+----------------------------------------
+
+[PROBE] INC-EVAL-42-0011 | MODE=RRF_FALLBACK | GAP=0.0185
+  Top 5 Families: [7, 3, 3, 0, 3]
+  Voters: V3=1.00 V5=0.92 V7=1.00
+----------------------------------------
+
+[PROBE] INC-EVAL-42-0012 | MODE=EXPLICIT_CLUSTER(sim=0.67) | GAP=0.0057
+  Top 5 Families: [4, 4, 4, 4, 4]
+  Voters: V3=1.00 V5=0.97 V7=1.00
+----------------------------------------
+
+[PROBE] INC-EVAL-42-0013 | MODE=EXPLICIT_CLUSTER(sim=0.67) | GAP=0.0084
+  Top 5 Families: [6, 3, 3, 0, 3]
+  Voters: V3=1.00 V5=0.95 V7=1.00
+----------------------------------------
+
+[PROBE] INC-EVAL-42-0014 | MODE=EXPLICIT_CLUSTER(sim=0.67) | GAP=0.0076
+  Top 5 Families: [1, 1, 1, 1, 1]
+  Voters: V3=0.00 V5=1.00 V7=1.00
+----------------------------------------
+
+CONFUSION MATRIX (true_family → mistaken_for → count)
+----------------------------------------------------------------------
+
+  True: F02 [memory_oom_cascade]
+    Confused with: F06 [certificate_expiry_cascade] × 3
+    DISTINGUISHING FEATURES (use these to discriminate):
+      → metrics: ['memory_rss_mb', 'gc_pause_ms'] vs ['tls_handshake_ms', 'error_rate']
+      → remediation: restart vs cert_rotate
+      → deploy_delta: (300, 600) vs None
+    Confused with: F09 [slow_memory_leak] × 3
+    DISTINGUISHING FEATURES (use these to discriminate):
+      → metrics: ['memory_rss_mb', 'gc_pause_ms'] vs ['memory_rss_mb', 'latency_p99_ms']
+      → depth: 3 vs 2
+      → deploy_delta: (300, 600) vs (3600, 7200)
+
+  True: F03 [db_connection_pool_exhaustion]
+    Confused with: F05 [traffic_spike_no_deploy] × 2
+    DISTINGUISHING FEATURES (use these to discriminate):
+      → metrics: ['db_pool_active', 'latency_p99_ms'] vs ['qps', 'latency_p99_ms', 'cpu_percent']
+      → depth: 2 vs 1
+      → remediation: config_change vs scale_out
+      → deploy_delta: (60, 120) vs None
+    Confused with: F01 [deploy_latency_cascade] × 1
+    DISTINGUISHING FEATURES (use these to discriminate):
+      → metrics: ['db_pool_active', 'latency_p99_ms'] vs ['latency_p99_ms']
+      → remediation: config_change vs rollback
+      → deploy_delta: (60, 120) vs (45, 90)
+
+  True: F05 [traffic_spike_no_deploy]
+    Confused with: F03 [db_connection_pool_exhaustion] × 2
+    DISTINGUISHING FEATURES (use these to discriminate):
+      → metrics: ['qps', 'latency_p99_ms', 'cpu_percent'] vs ['db_pool_active', 'latency_p99_ms']
+      → depth: 1 vs 2
+      → remediation: scale_out vs config_change
+      → deploy_delta: None vs (60, 120)
+
+  True: F06 [certificate_expiry_cascade]
+    Confused with: F02 [memory_oom_cascade] × 5
+    DISTINGUISHING FEATURES (use these to discriminate):
+      → metrics: ['tls_handshake_ms', 'error_rate'] vs ['memory_rss_mb', 'gc_pause_ms']
+      → remediation: cert_rotate vs restart
+      → deploy_delta: None vs (300, 600)
+    Confused with: F05 [traffic_spike_no_deploy] × 2
+    DISTINGUISHING FEATURES (use these to discriminate):
+      → metrics: ['tls_handshake_ms', 'error_rate'] vs ['qps', 'latency_p99_ms', 'cpu_percent']
+      → depth: 3 vs 1
+      → remediation: cert_rotate vs scale_out
+    Confused with: F09 [slow_memory_leak] × 1
+    DISTINGUISHING FEATURES (use these to discriminate):
+      → metrics: ['tls_handshake_ms', 'error_rate'] vs ['memory_rss_mb', 'latency_p99_ms']
+      → depth: 3 vs 2
+      → remediation: cert_rotate vs restart
+      → deploy_delta: None vs (3600, 7200)
+
+  True: F07 [cascading_rename_chain_failure]
+    Confused with: F01 [deploy_latency_cascade] × 19
+    DISTINGUISHING FEATURES (use these to discriminate):
+      → depth: 5 vs 2
+      → deploy_delta: (90, 180) vs (45, 90)
+
+  True: F08 [dependency_graph_shift_failure]
+    Confused with: F04 [correlated_multi_service_outage] × 3
+    DISTINGUISHING FEATURES (use these to discriminate):
+      → metrics: ['error_rate'] vs ['error_rate', 'latency_p99_ms']
+      → depth: 3 vs 4
+      → deploy_delta: (120, 240) vs (30, 60)
+    Confused with: F10 [thundering_herd_retry_storm] × 1
+    DISTINGUISHING FEATURES (use these to discriminate):
+      → metrics: ['error_rate'] vs ['qps', 'error_rate', 'latency_p99_ms']
+      → depth: 3 vs 4
+      → remediation: rollback vs circuit_break
+      → deploy_delta: (120, 240) vs (30, 120)
+
+  True: F10 [thundering_herd_retry_storm]
+    Confused with: F04 [correlated_multi_service_outage] × 3
+    DISTINGUISHING FEATURES (use these to discriminate):
+      → metrics: ['qps', 'error_rate', 'latency_p99_ms'] vs ['error_rate', 'latency_p99_ms']
+      → remediation: circuit_break vs rollback
+      → deploy_delta: (30, 120) vs (30, 60)
+
+======================================================================
+FAMILY FEATURE TABLE
+Family Metrics                             Depth  DeployDelta          Remediation    
+----------------------------------------------------------------------
+F01    ['latency_p99_ms']                  2      (45, 90)             rollback       
+F02    ['memory_rss_mb', 'gc_pause_ms']    3      (300, 600)           restart        
+F03    ['db_pool_active', 'latency_p99_ms'] 2      (60, 120)            config_change  
+F05    ['qps', 'latency_p99_ms', 'cpu_percent'] 1      None                 scale_out      
+F06    ['tls_handshake_ms', 'error_rate']  3      None                 cert_rotate    
+F07    ['latency_p99_ms']                  5      (90, 180)            rollback       
+F08    ['error_rate']                      3      (120, 240)           rollback       
+F10    ['qps', 'error_rate', 'latency_p99_ms'] 4      (30, 120)            circuit_break  

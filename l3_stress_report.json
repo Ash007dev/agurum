@@ -1,0 +1,202 @@
+{
+  "config": {
+    "adapter": "adapters.agurum:Engine",
+    "seeds": [
+      42,
+      1337,
+      9999,
+      31415,
+      27182
+    ],
+    "n_services": 50,
+    "n_families": 15,
+    "days": 21,
+    "mode": "fast"
+  },
+  "seed_results": [
+    {
+      "recall@5": 0.6787,
+      "precision@5_mean": 0.7667,
+      "remediation_acc": 0.9,
+      "latency_p95_ms": 696.68,
+      "latency_mean_ms": 492.79,
+      "weighted_automated": 0.6486,
+      "adaptability_delta": 0.0822,
+      "per_family_recall": {
+        "F08": 0.8333,
+        "F05": 0.4583,
+        "F10": 0.8,
+        "F07": 0.4167,
+        "F06": 0.75,
+        "F09": 0.625,
+        "F03": 1.0,
+        "F01": 0.8,
+        "F02": 0.5556
+      },
+      "per_family_precision": {
+        "F08": 0.6667,
+        "F05": 0.7333,
+        "F10": 0.8,
+        "F07": 0.5,
+        "F06": 0.9,
+        "F09": 1.0,
+        "F03": 1.0,
+        "F01": 0.8,
+        "F02": 1.0
+      },
+      "n_queries": 30,
+      "seed": 42,
+      "ingest_eps": 18162.0
+    },
+    {
+      "recall@5": 0.7389,
+      "precision@5_mean": 0.7267,
+      "remediation_acc": 0.9667,
+      "latency_p95_ms": 568.8,
+      "latency_mean_ms": 454.09,
+      "weighted_automated": 0.674,
+      "adaptability_delta": 0.0556,
+      "per_family_recall": {
+        "F10": 1.0,
+        "F07": 0.4,
+        "F02": 0.7917,
+        "F01": 0.9,
+        "F09": 0.5556,
+        "F06": 0.5185,
+        "F08": 0.8,
+        "F05": 0.5556,
+        "F03": 1.0,
+        "F04": 0.75
+      },
+      "per_family_precision": {
+        "F10": 0.6,
+        "F07": 0.8,
+        "F02": 0.95,
+        "F01": 0.36,
+        "F09": 1.0,
+        "F06": 0.9333,
+        "F08": 0.8,
+        "F05": 0.6667,
+        "F03": 0.8,
+        "F04": 0.9
+      },
+      "n_queries": 30,
+      "seed": 1337,
+      "ingest_eps": 17346.8
+    },
+    {
+      "recall@5": 0.6125,
+      "precision@5_mean": 0.84,
+      "remediation_acc": 0.8667,
+      "latency_p95_ms": 507.12,
+      "latency_mean_ms": 428.76,
+      "weighted_automated": 0.6331,
+      "adaptability_delta": 0.0787,
+      "per_family_recall": {
+        "F06": 0.4583,
+        "F10": 0.5,
+        "F01": 0.0,
+        "F04": 0.5,
+        "F02": 0.8,
+        "F08": 1.0,
+        "F05": 0.625,
+        "F03": 0.5,
+        "F07": 1.0
+      },
+      "per_family_precision": {
+        "F06": 0.7333,
+        "F10": 0.9,
+        "F01": 0.0,
+        "F04": 1.0,
+        "F02": 0.96,
+        "F08": 1.0,
+        "F05": 0.5,
+        "F03": 0.8,
+        "F07": 1.0
+      },
+      "n_queries": 30,
+      "seed": 9999,
+      "ingest_eps": 18287.3
+    },
+    {
+      "recall@5": 0.6681,
+      "precision@5_mean": 0.74,
+      "remediation_acc": 0.9333,
+      "latency_p95_ms": 629.36,
+      "latency_mean_ms": 446.25,
+      "weighted_automated": 0.6481,
+      "adaptability_delta": 0.1213,
+      "per_family_recall": {
+        "F04": 1.0,
+        "F03": 0.9167,
+        "F01": 0.6,
+        "F06": 0.8333,
+        "F05": 0.5556,
+        "F10": 0.6,
+        "F08": 0.8333,
+        "F07": 0.6667,
+        "F09": 0.25,
+        "F02": 0.5556
+      },
+      "per_family_precision": {
+        "F04": 0.8,
+        "F03": 0.7333,
+        "F01": 0.6,
+        "F06": 1.0,
+        "F05": 1.0,
+        "F10": 0.6,
+        "F08": 1.0,
+        "F07": 0.6667,
+        "F09": 0.35,
+        "F02": 1.0
+      },
+      "n_queries": 30,
+      "seed": 31415,
+      "ingest_eps": 17739.5
+    },
+    {
+      "recall@5": 0.6828,
+      "precision@5_mean": 0.7733,
+      "remediation_acc": 0.9333,
+      "latency_p95_ms": 490.38,
+      "latency_mean_ms": 413.29,
+      "weighted_automated": 0.6575,
+      "adaptability_delta": 0.1661,
+      "per_family_recall": {
+        "F06": 0.6667,
+        "F08": 0.8333,
+        "F09": 0.4286,
+        "F01": 0.5,
+        "F07": 0.5,
+        "F04": 0.88,
+        "F03": 0.5185,
+        "F02": 1.0,
+        "F10": 1.0,
+        "F05": 0.625
+      },
+      "per_family_precision": {
+        "F06": 0.8,
+        "F08": 1.0,
+        "F09": 0.6,
+        "F01": 0.6,
+        "F07": 0.5,
+        "F04": 0.88,
+        "F03": 0.9333,
+        "F02": 0.8,
+        "F10": 0.8,
+        "F05": 1.0
+      },
+      "n_queries": 30,
+      "seed": 27182,
+      "ingest_eps": 21050.1
+    }
+  ],
+  "summary": {
+    "recall@5": 0.6762,
+    "precision@5_mean": 0.7693,
+    "remediation_acc": 0.92,
+    "weighted_automated": 0.6523,
+    "adaptability_delta": 0.1008
+  },
+  "worst_weighted": 0.6331
+}

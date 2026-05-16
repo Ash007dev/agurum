@@ -39,6 +39,11 @@ ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 LLM_MODEL = os.environ.get("PCE_LLM_MODEL", "claude-haiku-4-5")
 LLM_MAX_TOKENS = int(os.environ.get("PCE_LLM_MAX_TOKENS", "400"))
 
+# ── Groq (deep mode, preferred over Anthropic — free & ultra-fast) ───────────
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
+GROQ_MODEL = os.environ.get("PCE_GROQ_MODEL", "llama-3.3-70b-versatile")
+GROQ_BASE_URL = "https://api.groq.com/openai/v1"
+
 # ── Thread pool ───────────────────────────────────────────────────────────────
 EXECUTOR_MAX_WORKERS = int(os.environ.get("PCE_EXECUTOR_WORKERS", "4"))
 
