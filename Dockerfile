@@ -4,8 +4,7 @@ FROM python:3.11-slim
 # Set environment variables
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PYTHONPATH=/app \
-    GROQ_API_KEY=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
+    PYTHONPATH=/app
 
 WORKDIR /app
 
