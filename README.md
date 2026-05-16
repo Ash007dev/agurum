@@ -14,9 +14,9 @@
 
 ---
 
-*Built for the Anvil Hackathon — Problem 02 / Open Track*
-
 </div>
+
+![Agurum Architecture](agurum.png)
 
 ---
 
