@@ -1,0 +1,48 @@
+{
+  "config": {
+    "adapter": "adapters.agurum:Engine",
+    "seeds": [
+      42
+    ],
+    "n_services": 15,
+    "n_families": 7,
+    "days": 7,
+    "mode": "fast"
+  },
+  "seed_results": [
+    {
+      "recall@5": 0.8133,
+      "precision@5_mean": 0.42,
+      "remediation_acc": 0.8,
+      "latency_p95_ms": 60.87,
+      "latency_mean_ms": 44.83,
+      "weighted_automated": 0.617,
+      "adaptability_delta": 0.24,
+      "per_family_recall": {
+        "F01": 1.0,
+        "F05": 0.4,
+        "F02": 0.6667,
+        "F07": 1.0,
+        "F03": 1.0
+      },
+      "per_family_precision": {
+        "F01": 0.4,
+        "F05": 0.4,
+        "F02": 0.4,
+        "F07": 0.4,
+        "F03": 0.6
+      },
+      "n_queries": 10,
+      "seed": 42,
+      "ingest_eps": 34456.0
+    }
+  ],
+  "summary": {
+    "recall@5": 0.8133,
+    "precision@5_mean": 0.42,
+    "remediation_acc": 0.8,
+    "weighted_automated": 0.617,
+    "adaptability_delta": 0.24
+  },
+  "worst_weighted": 0.617
+}

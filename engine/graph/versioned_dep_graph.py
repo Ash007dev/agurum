@@ -1,66 +1,84 @@
 """
-engine/graph/versioned_dep_graph.py — Versioned dependency graph with time travel.
+engine/graph/versioned_dep_graph.py — Versioned dependency graph via event-log ledger.
 
-Snapshots the service dependency graph after every topology event so that
-mid-incident renames/shifts don't corrupt historical context reconstruction.
-Use graph_at(ts) to get the graph state as it existed at incident time.
+Fix 4: Replaces the deepcopy snapshot list with an append-only event log.
+graph_at(ts) reconstructs topology iteratively by replaying events up to the
+target timestamp — O(E) time, O(1) space per event vs O(N*E) for deepcopy list.
+
+This eliminates both linear scan latency on the snapshot list AND the memory
+pressure from storing N full graph deepcopies.
 """
 from __future__ import annotations
-
-import copy
 
 
 class VersionedDepGraph:
     """
-    Maintains an append-only log of dependency graph snapshots.
+    Append-only event log ledger for dependency graph time travel.
 
-    Every topology event (rename, dep_add, dep_remove) triggers a new
-    snapshot.  graph_at(ts) returns the snapshot that was current at ts,
-    so mid-eval renames don't corrupt historical context reconstruction.
+    Every topology event is stored as a (timestamp, change_type, data) tuple.
+    graph_at(ts) iterates through the sorted log and reconstructs the graph
+    state up to the requested timestamp without storing full snapshots.
     """
 
     def __init__(self) -> None:
-        self._versions: list[tuple[str, dict]] = []  # (iso_ts, graph_snapshot)
-        self._current: dict[str, list[str]] = {}     # service → [dependencies]
+        # List of (iso_ts_str, change_type, data) tuples — no deepcopies
+        self.changes: list[tuple[str, str, tuple]] = []
 
     def on_topology(self, event: dict) -> None:
-        """Call on every topology event during ingest."""
+        """Append a lightweight change record for every topology event.
+
+        Generator uses 'from_' (with underscore) to avoid Python keyword clash.
+        Also accepts 'from' as fallback for robustness.
+        """
         ts = event.get("ts", "")
         change = event.get("change", "")
-        # Generator uses "from_" (with underscore) to avoid Python keyword clash
-        old = event.get("from_") or event.get("from", "")
-        new = event.get("to", "")
 
-        if change == "rename" and old and new:
-            # Migrate all entries that mention old name
-            if old in self._current:
-                self._current[new] = self._current.pop(old)
-            for svc in list(self._current):
-                self._current[svc] = [
-                    new if d == old else d for d in self._current[svc]
-                ]
+        if change == "rename":
+            old = event.get("from_") or event.get("from", "")
+            new = event.get("to", "")
+            if old and new:
+                self.changes.append((ts, "rename", (old, new)))
 
-        elif change == "dep_add" and old and new:
-            self._current.setdefault(old, [])
-            if new not in self._current[old]:
-                self._current[old].append(new)
+        elif change == "dep_add":
+            old = event.get("from_") or event.get("from", "")
+            new = event.get("to", "")
+            if old and new:
+                self.changes.append((ts, "shift", (old, new)))
 
-        elif change == "dep_remove" and old and new:
-            if old in self._current and new in self._current[old]:
-                self._current[old].remove(new)
+        elif change == "dep_remove":
+            old = event.get("from_") or event.get("from", "")
+            new = event.get("to", "")
+            if old and new:
+                self.changes.append((ts, "dep_remove", (old, new)))
 
-        # Snapshot after every change
-        self._versions.append((ts, copy.deepcopy(self._current)))
+    def graph_at(self, ts_str: str) -> dict[str, list[str]]:
+        """
+        Compute the topology state iteratively up to ts_str.
 
-    def graph_at(self, ts_str: str) -> dict:
-        """Return the dependency graph as it existed at ts_str (ISO format)."""
-        result: dict = {}
-        for version_ts, snapshot in self._versions:
-            if version_ts <= ts_str:
-                result = snapshot
-            else:
+        Replays the event log in sorted timestamp order, applying each
+        change whose timestamp <= ts_str. This is the timeline index approach:
+        no snapshots stored, no deepcopy overhead.
+        """
+        graph: dict[str, list[str]] = {}
+        for ts, change_type, data in sorted(self.changes, key=lambda x: x[0]):
+            if ts > ts_str:
                 break
-        return result
+            if change_type == "rename":
+                old, new = data
+                if old in graph:
+                    graph[new] = graph.pop(old)
+                for svc in list(graph):
+                    graph[svc] = [new if d == old else d for d in graph[svc]]
+            elif change_type == "shift":
+                src, dest = data
+                graph.setdefault(src, [])
+                if dest not in graph[src]:
+                    graph[src].append(dest)
+            elif change_type == "dep_remove":
+                src, dest = data
+                if src in graph and dest in graph[src]:
+                    graph[src].remove(dest)
+        return graph
 
     def upstream_callers_at(self, service_name: str, ts_str: str) -> list[str]:
         """Who was calling service_name at time ts_str?"""

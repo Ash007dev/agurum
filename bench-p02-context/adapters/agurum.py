@@ -132,10 +132,10 @@ class Engine(Adapter):
             return self._empty_context(signal)
 
         # 1. Extract Query Features from the FULL 700s window (captures latency spike at t-600s)
-        q_prof = self._extract_profile(window_events, trigger_cid, self.store._events)  # Fix 1: was _events_buffer (undefined)
+        q_prof = self._extract_profile(window_events, trigger_cid, self.store._events, target_ts=signal_ts_str)
         # 2. Build Dense NL Summary using FOCUSED 300s window (avoids background dilution)
         focused_events = self._get_global_window(signal_ts_str, window_sec=300)
-        focused_prof = self._extract_profile(focused_events, trigger_cid, self.store._events) if focused_events else q_prof  # Fix 1
+        focused_prof = self._extract_profile(focused_events, trigger_cid, self.store._events, target_ts=signal_ts_str) if focused_events else q_prof
         roles_str = ", ".join(sorted(focused_prof.get("roles", []))) or "none"
         err_str = ", ".join(sorted(focused_prof.get("compound_errors", []))) or "none"
         # Enrich with spike info from the full 700s window
@@ -197,19 +197,21 @@ class Engine(Adapter):
             # Voter 1: Cosine (Semantic Intent)
             algo1_cosine.append((inc_id, cand["score"]))
             
-            # Voter 2: Structural Identity Jaccard (Fix 3: includes correlated-outage signals)
+            # Voter 2: Structural Identity Jaccard (Pillar 3: strict correlated-outage penalty)
             if c_prof:
                 trig_match = 1.0 if q_prof.get("trigger_role") == c_prof.get("trigger_role") else 0.0
                 comp_err_sim = calc_weighted_jaccard(q_prof.get("compound_errors", []), c_prof.get("compound_errors", []))
                 comp_spk_sim = calc_weighted_jaccard(q_prof.get("compound_spikes", []), c_prof.get("compound_spikes", []))
-                # Fix 3: correlated multi-service discriminator
+                # Pillar 3: correlated multi-service discriminator
                 q_corr = q_prof.get("is_correlated", False)
                 c_corr = c_prof.get("is_correlated", False)
-                corr_match = 1.0 if q_corr == c_corr else 0.0
                 q_n = q_prof.get("n_affected_svcs", 1)
                 c_n = c_prof.get("n_affected_svcs", 1)
                 n_aff_sim = 1.0 - min(abs(q_n - c_n) / max(q_n, c_n, 1), 1.0)
-                prof_score = (0.30 * trig_match) + (0.30 * comp_err_sim) + (0.15 * comp_spk_sim) + (0.15 * corr_match) + (0.10 * n_aff_sim)
+                prof_score = (0.30 * trig_match) + (0.35 * comp_err_sim) + (0.15 * comp_spk_sim) + (0.20 * n_aff_sim)
+                # Pillar 3: strict penalty — halve score on correlation mismatch
+                if q_corr != c_corr:
+                    prof_score *= 0.5
                 algo2_profile.append((inc_id, prof_score))
             else:
                 algo2_profile.append((inc_id, 0.0))
@@ -263,57 +265,55 @@ class Engine(Adapter):
         sorted_candidates = sorted(fused_scores.items(), key=lambda x: x[1], reverse=True)
         cand_dict = {c["payload"]["incident_id"]: c for c in candidates}
         
-        # --- Consensus Stacking Logic (L3 Discrimination) ---
-        def get_cluster_idx(iid):
-            fp = self.clustering.member_fps.get(iid)
-            return self.clustering._assign_cluster(fp) if fp else -1
+        # --- Pillar 4: Dynamic Blanket + Confidence Switch ---
+        top_ids: list[str] = []
+        mode_str = "DYNAMIC_BLANKET"
 
-        # 1. Structural Match (Query to Cluster)
-        q_best_sim = 0.0
-        q_best_cluster_idx = -1
-        for i, c in enumerate(self.clustering.clusters):
-            max_s = 0.0
-            for mid in c["members"]:
-                s = self.clustering._jaccard(q_fp, self.clustering.member_fps[mid])
-                if s > max_s: max_s = s
-            if max_s > q_best_sim:
-                q_best_sim, q_best_cluster_idx = max_s, i
-        
-        # 2. Semantic Match (Top RRF Candidate to Cluster)
-        top_inc_id = sorted_candidates[0][0]
-        top_cluster_idx = get_cluster_idx(top_inc_id)
-        
-        # Stacking Decision
-        top_ids = [inc_id for inc_id, _ in sorted_candidates[:5]]
-        mode_str = "RRF_ENSEMBLE"
-        
-        # Consensus: if both structural and semantic paths agree on the same family
-        if q_best_cluster_idx != -1 and q_best_cluster_idx == top_cluster_idx and q_best_sim > 0.7:
-            mode_str = f"CONSENSUS_STACK(sim={q_best_sim:.2f})"
-            members = self.clustering.clusters[q_best_cluster_idx]["members"]
-            promoted = []
-            for iid, _ in sorted_candidates[:50]:
-                if iid in members: promoted.append(iid)
-                if len(promoted) >= 5: break
-            if len(promoted) >= 2:
-                top_ids = promoted
-        
-        # Fallback to pure Fingerprint Match if RRF is completely lost but similarity is high
-        elif q_best_cluster_idx != -1 and q_best_sim > 0.95:
-            mode_str = f"FINGERPRINT_FORCE(sim={q_best_sim:.2f})"
-            members = self.clustering.clusters[q_best_cluster_idx]["members"]
-            top_ids = []
-            for iid, _ in sorted_candidates[:50]:
-                if iid in members: top_ids.append(iid)
-                if len(top_ids) >= 5: break
+        # Confidence Switch: check if top-1 has exact trigger_cid match + high Jaccard
+        should_stack = False
+        stack_family = None
+        if sorted_candidates:
+            top_inc_id = sorted_candidates[0][0]
+            top_payload = cand_dict.get(top_inc_id, {}).get("payload", {})
+            top_trigger_cid = top_payload.get("trigger_cid", "")
+            top_fp = self.clustering.member_fps.get(top_inc_id, {})
+            jaccard_sim = self.clustering._jaccard(q_fp, top_fp) if top_fp else 0.0
+
+            if top_trigger_cid == trigger_cid and jaccard_sim > 0.95:
+                should_stack = True
+                stack_family = top_payload.get("family")
+
+        if should_stack and stack_family is not None:
+            # Confidence Switch: stack the single best-match family across all 5 slots
+            mode_str = f"CONFIDENCE_STACK(fam={stack_family})"
+            for inc_id, _ in sorted_candidates:
+                payload = cand_dict.get(inc_id, {}).get("payload", {})
+                if payload.get("family") == stack_family:
+                    top_ids.append(inc_id)
+                if len(top_ids) >= 5:
+                    break
+        else:
+            # Dynamic Blanket: 1 candidate per family from RRF-sorted list
+            seen_families: set = set()
+            for inc_id, _ in sorted_candidates:
+                payload = cand_dict.get(inc_id, {}).get("payload", {})
+                fam = payload.get("family")
+                if fam not in seen_families:
+                    seen_families.add(fam)
+                    top_ids.append(inc_id)
+                if len(top_ids) >= 5:
+                    break
+            mode_str = f"DYNAMIC_BLANKET(N={len(seen_families)})"
 
         # --- DIAGNOSTIC PROBE ---
-        print(f"\n[PROBE] {signal.get('incident_id','?')} | MODE={mode_str} | TOP_SIM={q_best_sim:.2f}")
+        print(f"\n[PROBE] {signal.get('incident_id','?')} | MODE={mode_str}")
         print("-" * 40)
 
         ranked = []
         for inc_id in top_ids:
-            cand = cand_dict[inc_id]
+            cand = cand_dict.get(inc_id)
+            if not cand:
+                continue
             score = fused_scores.get(inc_id, 0.0)
             ranked.append({
                 "incident_id": inc_id,
@@ -323,27 +323,6 @@ class Engine(Adapter):
             })
         
         return self._format_results(ranked, trigger_svc, window_events)
-
-        similar_past = [
-            {
-                "incident_id": r["incident_id"],
-                "similarity": r["combined_score"],
-                "rationale": r["rationale"],
-            }
-            for r in ranked
-        ]
-
-        remediations = self._build_remediations(ranked, trigger_svc)
-        confidence = ranked[0]["combined_score"] if ranked else 0.0
-
-        return {
-            "related_events": window_events,
-            "causal_chain": [],
-            "similar_past_incidents": similar_past,
-            "suggested_remediations": remediations,
-            "confidence": confidence,
-            "explain": self._template_explain(signal, window_events, ranked, remediations),
-        }
 
     def close(self) -> None:
         pass
@@ -444,12 +423,15 @@ class Engine(Adapter):
         if seconds < 1200:  return "20m"
         return "infinite"
 
-    def _extract_profile(self, window_events: list[dict], trigger_cid: str, global_buffer: list[dict] = None) -> dict:
+    def _extract_profile(self, window_events: list[dict], trigger_cid: str, global_buffer: list[dict] = None, target_ts: str = "") -> dict:
         """
         Extract structural features: roles, anomalies, spikes, and temporal deltas.
         Scans global_buffer for true last_deploy_ts to avoid window truncation.
 
-        Fix 3: also computes n_affected_svcs and is_correlated to fingerprint
+        Pillar 2: when target_ts is provided, roles are computed from the historical
+        edge snapshot at that timestamp (time-travel topology). Otherwise uses current edges.
+
+        Pillar 3: computes n_affected_svcs and is_correlated to fingerprint
         correlated multi-service outages separately from single-service failures.
         """
         roles = set()
@@ -461,24 +443,29 @@ class Engine(Adapter):
 
         first_spike_ts = 0.0
         last_deploy_ts = 0.0
-        # Fix 3: track which canonical services have a spike
+        # Pillar 3: track which canonical services have anomalies
         spiking_canonical_ids: set[str] = set()
-        
+
+        # Pillar 2: snapshot edges once for the target timestamp (avoids per-event replay)
+        if target_ts:
+            _edges_snapshot = self.tracker.get_edges_at(target_ts)
+            def _role(c): return self.tracker._role_from_edges(c, _edges_snapshot)
+        else:
+            def _role(c): return self.tracker.get_role(c)
+
         for e in window_events:
             ts = _parse_ts(e.get("ts", ""))
             kind = e.get("kind", "")
-            svc = e.get("service", "") or e.get("name", "")
-            
-            if not svc: continue
-            cid = self.tracker.resolve(svc)
-            role = self.tracker.get_role(cid)
+            # Resolve canonical mapping with "unknown" fallback — never silently skip
+            cid = self.tracker.resolve(e.get("service", "unknown") or e.get("name", "unknown") or "unknown")
+            role = _role(cid)
             roles.add(role)
             if cid == trigger_cid:
                 trigger_role = role
-            
+
             if kind == "deploy":
                 last_deploy_ts = ts
-            
+
             elif kind == "log":
                 msg = (e.get("msg", "") or e.get("message", "")).lower()
                 if "timeout" in msg:
@@ -501,15 +488,15 @@ class Engine(Adapter):
             elif kind == "metric":
                 val = e.get("value", 0)
                 if val > 3000:
+                    # Fix 3: bind metric name directly to resolved canonical component
                     metric_name = e.get("name", "unknown_metric")
                     spikes.add(metric_name)
                     compound_spikes.add(f"{role}_{metric_name}_spike")
                     compound_spikes.add(f"{cid}_{metric_name}_spike")
                     if first_spike_ts == 0.0:
                         first_spike_ts = ts
-                    # Fix 3: track the path-compressed canonical ID of every spiking service
                     spiking_canonical_ids.add(cid)
-            
+
             # Count any service with an anomaly in its CID-set
             if kind in ["log", "metric"]:
                 spiking_canonical_ids.add(cid)
@@ -582,11 +569,12 @@ class Engine(Adapter):
             trigger_cid = self.tracker.resolve(trigger_svc)
             
             # Extract profile from full 700s window (with global buffer for deploy tracking)
-            c_prof = self._extract_profile(window_events, trigger_cid, self.store._events)  # Fix 1
+            # Pillar 2: anchor to incident timestamp for historical topology fidelity
+            c_prof = self._extract_profile(window_events, trigger_cid, self.store._events, target_ts=target_ts_str)
 
             # Build NL embedding string from focused 300s window to avoid dilution
             focused_events = self._get_global_window(target_ts_str, window_sec=300)
-            focused_prof = self._extract_profile(focused_events, trigger_cid, self.store._events) if focused_events else c_prof  # Fix 1
+            focused_prof = self._extract_profile(focused_events, trigger_cid, self.store._events, target_ts=target_ts_str) if focused_events else c_prof
             roles_str = ", ".join(sorted(focused_prof.get("roles", []))) or "none"
             err_str = ", ".join(sorted(focused_prof.get("compound_errors", []))) or "none"
             spike_str = ", ".join(sorted(c_prof.get("spike_names", []))) or "none"
