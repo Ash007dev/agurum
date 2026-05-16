@@ -29,10 +29,11 @@ fi
 
 echo "[*] Using Python: $PYTHON_BIN"
 
-# --- Evaluator API Key Fallback ---
-# We inject the Groq API key directly so the judges can evaluate the
-# Deep Mode SRE Narratives without needing to set up their own accounts.
-export GROQ_API_KEY="${GROQ_API_KEY:-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}"
+# --- Evaluator API Key ---
+# Load environment variables from .env if it exists
+if [ -f ".env" ]; then
+    export $(grep -v '^#' .env | xargs)
+fi
 
 # Execute all benchmark sequences (L2 and L3)
 echo "[*] Running bench-adapter (quick check)..."
